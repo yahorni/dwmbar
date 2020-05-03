@@ -1,0 +1,8 @@
+#!/bin/sh
+
+case $BLOCK_BUTTON in
+	4) xbacklight -dec 5 >/dev/null ;;
+	5) xbacklight -inc 5 >/dev/null ;;
+esac
+
+echo "🌞 $(xbacklight -get | cut -d '.' -f1)%" && exit

@@ -1,0 +1,11 @@
+#!/bin/bash
+
+read STATUS PERCENTAGE < <(acpi | tr -d ',' | cut -d ' ' -f3,4)
+
+if [ "$STATUS" == "Charging" ]; then
+	echo "🔌 $PERCENTAGE" && exit
+elif [ "$STATUS" == "Discharging" ] || [ "$STATUS" == "Full" ]; then
+	echo -en "🔋 $PERCENTAGE" && exit
+else
+	echo -en "❓ $PERCENTAGE" && exit
+fi
