@@ -1,0 +1,38 @@
+#!/bin/sh
+
+case $BLOCK_BUTTON in
+    1) mpc toggle >/dev/null 2>&1 ;;
+    3) setsid $TERMINAL -e ncmpcpp >/dev/null 2>&1 & ;;
+    4) mpc prev >/dev/null 2>&1 ;;
+    5) mpc next >/dev/null 2>&1 ;;
+esac
+
+if [ $(mpc status | wc -l) -lt 3 ]; then
+    echo "[⏹] MPD stopped" && exit
+else
+    stat="$(mpc status | sed -n '2s/\[\(.*\)\].*/\1/p')"
+    case $stat in
+        playing) stat='[⏸]' ;;
+        paused) stat='[▶]' ;;
+        *) stat='[❓]' ;;
+    esac
+fi
+
+artist="$(mpc status -f "%artist%" | cut -d $'\n' -f1)"
+title="$(mpc status -f "%title%" | cut -d $'\n' -f1)"
+
+if [ ! -z "$title" ]; then
+    if [ ! -z "$artist" ]; then
+        song="$artist — $title"
+    else
+        song="$title"
+    fi
+else
+    file="$(mpc status -f "%file%" | cut -d $'\n' -f1)"
+    file="${file##*/}"
+    song="${file%.*}"
+fi
+
+[ "${#song}" -gt 50 ] && song="${song:0:50}"
+
+echo "$stat $song"
