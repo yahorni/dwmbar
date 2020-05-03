@@ -33,6 +33,6 @@ else
     song="${file%.*}"
 fi
 
-[ "${#song}" -gt 50 ] && song="${song:0:50}"
+[ "${#song}" -gt 50 ] && song="${song:0:47}..."
 
 echo "$stat $song"

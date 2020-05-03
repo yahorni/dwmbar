@@ -38,7 +38,7 @@ listenPlayer() {
 
 listenXKB() {
     while :; do
-        xkb-switch -w && sendSignal "layout"
+        xkb-switch -w && sendSignal "keyboard"
     done
 }
 

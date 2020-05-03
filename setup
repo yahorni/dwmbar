@@ -1,8 +1,9 @@
-player      $BLOCKS/player      8
-torrent     $BLOCKS/torrent     7
-volume      $BLOCKS/volume      6
-bright      $BLOCKS/brightness  5
-layout      xkb-switch          4
-battery     $BLOCKS/battery     3
-temperature $BLOCKS/temperature 2
-datetime    $BLOCKS/datetime    1
+player      $BLOCKS/player      1
+torrent     $BLOCKS/torrent     2
+volume      $BLOCKS/volume      3
+bright      $BLOCKS/brightness  4
+keyboard    xkb-switch          5
+internet    $BLOCKS/internet    6
+battery     $BLOCKS/battery     7
+temperature $BLOCKS/temperature 8
+datetime    $BLOCKS/datetime    9
