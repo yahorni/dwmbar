@@ -43,7 +43,10 @@ setSignals() {
 
 # NOTE: may be troubles with background processes
 script_path=$(readlink -f "$0")
-trap "exec \"$script_path\"" HUP
+trap "exec \"$script_path\"" USR2
+
+# full bar update
+trap 'updateCache ; setBar' USR1
 
 setSignals
 
