@@ -9,9 +9,9 @@ install:
 	cp ./config.sh ${CONFIG_PATH}
 	cp -r ./blocks ${CONFIG_PATH}
 	mkdir -p ${PREFIX}
-	cp {dwmbar,dwmlistener} ${PREFIX}/bin
-	chmod 755 ${PREFIX}/bin/{dwmbar,dwmlistener}
+	cp {dwmbar,dwmlistener.sh} ${PREFIX}/bin
+	chmod 755 ${PREFIX}/bin/{dwmbar,dwmlistener.sh}
 
 uninstall:
 	rm -rf ${CONFIG_PATH}
-	rm ${PREFIX}/bin/{dwmbar,dwmlistener}
+	rm ${PREFIX}/bin/{dwmbar,dwmlistener.sh}

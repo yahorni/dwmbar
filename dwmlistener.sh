@@ -6,9 +6,11 @@ declare -A signals
 
 OLDIFS=$IFS
 IFS=$'\n'
+sig=1
 for line in $(cat $SETUP) ; do
-    IFS=' ' read -r key sig <<<$(echo $line | tr -s ' ' | cut -d' ' -f1,3)
+    IFS=' ' read -r key <<<$(echo $line | tr -s ' ' | cut -d' ' -f1)
     signals[$key]="$sig"
+    sig=$(($sig+1))
 done
 IFS=$OLDIFS
 
@@ -60,5 +62,9 @@ listenPlayer &
 listenACPI &
 
 trap "kill_descendant_processes $$" INT
+trap "kill_descendant_processes $$" TERM
+
+script_path=$(readlink -f "$0")
+trap "kill_descendant_processes $$ ; exec \"$script_path\"" HUP
 
 exec sleep infinity
