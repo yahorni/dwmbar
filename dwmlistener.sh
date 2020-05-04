@@ -63,8 +63,9 @@ listenACPI &
 
 trap "kill_descendant_processes $$" INT
 trap "kill_descendant_processes $$" TERM
+trap "kill_descendant_processes $$" HUP
 
 script_path=$(readlink -f "$0")
-trap "kill_descendant_processes $$ ; exec \"$script_path\"" HUP
+trap "kill_descendant_processes $$ ; exec \"$script_path\"" USR1
 
 exec sleep infinity
