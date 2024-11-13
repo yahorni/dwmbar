@@ -2,14 +2,8 @@
 # vim:ft=sh
 
 case $BLOCK_BUTTON in
-    1)  backlight_dump="/tmp/backlight_dump"
-        if [ "$(brillo)" = "$(brillo -c)" ]; then
-            [ -f "$backlight_dump" ] && brillo -S "$(cat $backlight_dump)"
-        else
-            brillo > $backlight_dump
-            brillo -S "$(brillo -c)"
-        fi
-        ;;
+    1)  brillo -q -S 75 ;;
+    3)  brillo -q -S 100 ;;
     4)  brillo -q -U 3 ;;
     5)  brillo -q -A 3 ;;
 esac
