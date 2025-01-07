@@ -1,4 +1,4 @@
-#!/usr/bin/env dash
+#!/bin/dash
 
 case $BLOCK_BUTTON in
     1) notify-send "🧠 Memory hogs" "$(ps axch -o cmd:15,%mem --sort=-%mem | head)" ;;

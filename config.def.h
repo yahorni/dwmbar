@@ -3,18 +3,18 @@
 
 /* setup your blocks here */
 static const Block blocks[] = {
-    /* name */       /* command */  /* interval */
-    { "player",      "mpd",         10 },
-    { "torrent",     "torrent",     15 },
-    { "volume",      "pulse",       5  },
-    { "bright",      "brightness",  10 },
-    { "internet",    "internet",    5  },
-    { "memory",      "memory",      5  },
-    { "cpu",         "cpu_bars",    1  },
-    { "battery",     "battery",     10 },
-    { "temperature", "temperature", 10 },
-    { "keyboard",    "keyboard",    10 },
-    { "datetime",    "datetime",    60 },
+    /* name */       /* command */      /* interval */
+    { "player",      "mpd.sh",          10 },
+    { "torrent",     "transmission.sh", 15 },
+    { "volume",      "pamixer.sh",      5  },
+    { "bright",      "xbacklight.sh",   10 },
+    { "network",     "network.sh",      5  },
+    { "memory",      "memory.sh",       5  },
+    { "cpu",         "cpu-bars.sh",     1  },
+    { "battery",     "acpi.sh",         10 },
+    { "temperature", "temperature.sh",  10 },
+    { "keyboard",    "xkb-switch.sh",   10 },
+    { "datetime",    "datetime.sh",     60 },
 };
 
 /* drawable delimiter for blocks

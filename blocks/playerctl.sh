@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 format="🎹 <song> <stat>"
-name_length=60
+name_length=30
 
 case $BLOCK_BUTTON in
     1) playerctl play-pause ;;

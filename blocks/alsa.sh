@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 case $BLOCK_BUTTON in
     1) amixer set Master toggle >/dev/null ;;

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 read -r STATUS PERCENTAGE < <(acpi | tr -d ',' | tr -d '%' | cut -d ' ' -f3,4)
 

@@ -1,5 +1,4 @@
-#!/usr/bin/env dash
-# vim: ft=sh
+#!/bin/dash
 
 # Module showing CPU load as a changing bars.
 # Just like in polybar.
