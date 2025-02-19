@@ -7,7 +7,6 @@ VERSION = 0.0.1
 PREFIX = /usr/local
 MANPREFIX = ${PREFIX}/share/man
 BLOCKSPREFIX = ${PREFIX}/share/dwmbar
-# BLOCKSPREFIX = ${PWD}/blocks
 
 PKG_CONFIG = pkg-config
 
@@ -16,9 +15,9 @@ INCS =
 LIBS = -lpthread -lX11
 
 # flags
-CPPFLAGS = -D_POSIX_C_SOURCE=200809L -DVERSION=\"${VERSION}\" -DBLOCKSPREFIX=\"${BLOCKSPREFIX}\"
-# CFLAGS   = -g -std=c99 -pedantic -Wall -O0 ${INCS} ${CPPFLAGS}
-CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Wno-deprecated-declarations -Os ${INCS} ${CPPFLAGS}
+CPPFLAGS = -D_POSIX_C_SOURCE=200809L -DVERSION=\"${VERSION}\" -DBLOCKSPREFIX=\"${DESTDIR}${BLOCKSPREFIX}\"
+CFLAGS   = -g -std=c99 -pedantic -Wall -O0 ${INCS} ${CPPFLAGS}
+# CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Wno-deprecated-declarations -Os ${INCS} ${CPPFLAGS}
 LDFLAGS  = ${LIBS}
 
 # compiler and linker

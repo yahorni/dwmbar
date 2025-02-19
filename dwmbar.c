@@ -18,19 +18,30 @@
 
 #include "util.h"
 
-#define BAR_MAX_LEN 510
-#define BLOCKS_PATH_MAX_LEN 250
-#define BLOCK_CMD_MAX_LEN 510
-#define BLOCK_OUTPUT_MAX_LEN 60
+#define BAR_LEN 510
+#define BLOCKS_PATH_LEN 250
+#define BLOCK_CMD_LEN 510
+#define BLOCK_OUTPUT_LEN 60
 #define FIFO_BUFFER_LEN 250
 #define EMPTY_CMD_OUTPUT "..."
+#define SERVICE_READ_BUFFER_LEN 510
+
 #define LOG_PREFIX "dwmbar: "
+#define DEBUG_LOG_PREFIX "dwmbar(debug): "
+#define ERROR_LOG_PREFIX "dwmbar(error): "
 
 typedef struct {
     char *name;
     char *command;
     unsigned int interval;
 } Block;
+
+typedef struct {
+    char *command;
+    int oneshot;
+    int block;
+    char *pattern;
+} Service;
 
 /* function declarations */
 
@@ -40,6 +51,10 @@ static void run_command(const Block *block, char *output, int button);
 static size_t get_block_index(const char *name);
 
 static void *periodic_updater(void *vargp);
+static void *run_service(void *vargp);
+static void run_oneshot_process(Service *service);
+static void run_continuous_process(Service *service);
+static void stop_service(pid_t pid, char *command);
 
 static void signal_handler(int signum);
 static void restart_handler(int signum);
@@ -53,10 +68,10 @@ static void run();
 static void cleanup();
 
 /* variables */
-static char old_status[BAR_MAX_LEN + 1];
-static char new_status[BAR_MAX_LEN + 1];
-static char current_command[BLOCK_CMD_MAX_LEN + 1];
-static char blocks_path[BLOCKS_PATH_MAX_LEN + 1];
+static char old_status[BAR_LEN + 1];
+static char new_status[BAR_LEN + 1];
+static char current_command[BLOCK_CMD_LEN + 1];
+static char blocks_path[BLOCKS_PATH_LEN + 1];
 
 static Display *dpy;
 static int screen;
@@ -73,7 +88,10 @@ pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
 #include "config.h"
 
 #define BLOCKS_AMOUNT (sizeof(blocks) / sizeof(blocks[0]))
-static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_MAX_LEN + 1];
+static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_LEN + 1];
+
+#define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
+static pthread_t services_thread_id[SERVICES_AMOUNT];
 
 /* function implementations */
 
@@ -84,7 +102,7 @@ void set_status(char *status) {
     }
     screen = DefaultScreen(dpy);
     root_window = RootWindow(dpy, screen);
-    // fprintf(stderr, LOG_PREFIX "debug: new status:\n%s\n", new_status);
+    // fprintf(stderr, DEBUG_LOG_PREFIX "new status:\n%s\n", new_status);
     XStoreName(dpy, root_window, status);
     XCloseDisplay(dpy);
 }
@@ -96,36 +114,36 @@ void update_status() {
     int k = 0;
     int delim_width = with_spaces ? 4 : 2;
     /* leave space for last \0 */
-    for (size_t i = 0; i < BLOCKS_AMOUNT && k < BAR_MAX_LEN - 1; ++i) {
+    for (size_t i = 0; i < BLOCKS_AMOUNT && k < BAR_LEN - 1; i++) {
         /* check i > 0 to skip first block */
-        if (i && k + delim_width < BAR_MAX_LEN - 1) {
+        if (i && k + delim_width < BAR_LEN - 1) {
             if (with_spaces) new_status[k++] = ' ';
             new_status[k++] = delimiter;
             new_status[k++] = '\n';
             if (with_spaces) new_status[k++] = ' ';
         }
 
-        append_buffer(new_status + k, blocks_cache[i], BAR_MAX_LEN - k - 1);
+        append_buffer(new_status + k, blocks_cache[i], BAR_LEN - k - 1);
         k = strlen(new_status);
     }
 
     /* if new status equals to old then do not update*/
     if (!strcmp(new_status, old_status)) {
         /* clear new status */
-        reset_buffer(new_status, BAR_MAX_LEN);
+        reset_buffer(new_status, BAR_LEN);
         pthread_mutex_unlock(&update_status_lock);
         return;
     }
 
     /* clear and reset old status */
-    reset_buffer(old_status, BAR_MAX_LEN);
-    copy_buffer(old_status, new_status, BAR_MAX_LEN);
+    reset_buffer(old_status, BAR_LEN);
+    copy_buffer(old_status, new_status, BAR_LEN);
 
     /* update status */
     set_status(new_status);
 
     /* clear new status */
-    reset_buffer(new_status, BAR_MAX_LEN);
+    reset_buffer(new_status, BAR_LEN);
 
     pthread_mutex_unlock(&update_status_lock);
 }
@@ -134,7 +152,9 @@ void update_status() {
 void run_command(const Block *block, char *output, int button) {
     pthread_mutex_lock(&run_command_lock);
 
-    reset_buffer(output, BLOCK_OUTPUT_MAX_LEN);
+    reset_buffer(output, BLOCK_OUTPUT_LEN);
+    reset_buffer(current_command, BLOCK_CMD_LEN);
+
     copy_buffer(output, EMPTY_CMD_OUTPUT, sizeof(EMPTY_CMD_OUTPUT));
 
     FILE *command_file;
@@ -144,12 +164,20 @@ void run_command(const Block *block, char *output, int button) {
     } else {
         sprintf(current_command, "%s/%s", blocks_path, block->command);
     }
-    command_file = popen(current_command, "r");
-    if (!command_file) return;
+    // fprintf(stderr, DEBUG_LOG_PREFIX "executing: '%s'\n", current_command);
 
-    fgets(output, BLOCK_OUTPUT_MAX_LEN, command_file);
-    int new_size = remove_from_buffer(output, '\n');
-    output[new_size] = '\0';
+    if (!(command_file = popen(current_command, "r"))) {
+        fprintf(stderr, LOG_PREFIX "Failed to execute: '%s'\n", current_command);
+        return;
+    }
+
+    if (fgets(output, BLOCK_OUTPUT_LEN, command_file)) {
+        int new_size = remove_from_buffer(output, '\n');
+        output[new_size] = '\0';
+    } else {
+        fprintf(stderr, LOG_PREFIX "Failed to read command output: '%s'\n", current_command);
+        // FIXME: not sure what to do here
+    }
 
     pclose(command_file);
 
@@ -168,14 +196,14 @@ void *periodic_updater(void *vargp) {
     /* suppress warn */
     (void)vargp;
 
-    const Block *current;
+    const Block *current_block;
     unsigned int time = 0;
 
     while (is_running) {
         for (size_t i = 0; i < BLOCKS_AMOUNT; i++) {
-            current = blocks + i;
-            if (time % current->interval == 0) {
-                run_command(current, blocks_cache[i], 0);
+            current_block = blocks + i;
+            if (time % current_block->interval == 0) {
+                run_command(current_block, blocks_cache[i], 0);
             }
         }
         update_status();
@@ -184,6 +212,87 @@ void *periodic_updater(void *vargp) {
     }
 
     return NULL;
+}
+
+void *run_service(void *vargp) {
+    Service *service = vargp;
+    fprintf(stderr, LOG_PREFIX "Starting service '%s' for block '%s'\n", service->command, blocks[service->block].name);
+
+    if (service->oneshot) {
+        run_oneshot_process(service);
+    } else {
+        run_continuous_process(service);
+    }
+
+    return NULL;
+}
+
+void run_oneshot_process(Service *service) {
+    int block = service->block;
+    char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
+    int pout;
+    pid_t pid;
+    FILE *process_output;
+
+    // TODO: wait for oneshot process to finish first, then parse output and return code
+    // use standard popen()?
+    while (is_running) {
+        if ((pid = process_open(service->command, &pout)) == -1) {
+            fprintf(stderr, ERROR_LOG_PREFIX "Failed to run service: '%s'\n", service->command);
+            return;
+        }
+
+        if (!(process_output = fdopen(pout, "r"))) {
+            fprintf(stderr, ERROR_LOG_PREFIX "Failed to open service output: '%s'\n", service->command);
+            stop_service(pid, service->command);
+            return;
+        }
+
+        fgets(read_buffer, SERVICE_READ_BUFFER_LEN, process_output);
+        fprintf(stderr, DEBUG_LOG_PREFIX "Service read: '%s'\n", service->command);
+
+        run_command(&blocks[block], blocks_cache[block], 0);
+        update_status();
+    }
+}
+
+void run_continuous_process(Service *service) {
+    int block = service->block;
+    char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
+
+    int pout;
+    pid_t pid;
+    FILE *process_output;
+
+    if ((pid = process_open(service->command, &pout)) == -1) {
+        fprintf(stderr, ERROR_LOG_PREFIX "Failed to run service: '%s'\n", service->command);
+        return;
+    }
+
+    if (!(process_output = fdopen(pout, "r"))) {
+        fprintf(stderr, ERROR_LOG_PREFIX "Failed to open service output: '%s'\n", service->command);
+        stop_service(pid, service->command);
+        return;
+    }
+
+    while (is_running && fgets(read_buffer, SERVICE_READ_BUFFER_LEN, process_output)) {
+        fprintf(stderr, DEBUG_LOG_PREFIX "Service read: '%s'\n", service->command);
+        run_command(&blocks[block], blocks_cache[block], 0);
+        update_status();
+    }
+
+    stop_service(pid, service->command);
+}
+
+void stop_service(pid_t pid, char *command) {
+    if (kill(pid, 0) == ESRCH) {
+        fprintf(stderr, ERROR_LOG_PREFIX "Service '%s' already terminated\n", command);
+        return;
+    }
+
+    if (kill(pid, SIGTERM)) {
+        fprintf(stderr, ERROR_LOG_PREFIX "Failed to terminate service: '%s'\n", command);
+    }
 }
 
 void signal_handler(int signum) {
@@ -201,7 +310,7 @@ void restart_handler(int signum) {
 void expand_blocks_path() {
     wordexp_t exp_result;
     wordexp(BLOCKSPREFIX, &exp_result, 0);
-    copy_buffer(blocks_path, exp_result.we_wordv[0], BLOCKS_PATH_MAX_LEN);
+    copy_buffer(blocks_path, exp_result.we_wordv[0], BLOCKS_PATH_LEN);
 }
 
 void remove_fifo_if_exists() {
@@ -248,15 +357,7 @@ int open_fifo() {
     return fifo_fd;
 }
 
-void run() {
-    fprintf(stderr, LOG_PREFIX "Starting bar...\n");
-    fprintf(stderr, LOG_PREFIX "FIFO file: %s\n", fifo_path);
-
-    /* set periodical updates */
-    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
-        die(LOG_PREFIX "pthread_create() failed");
-    }
-
+sigset_t setup_signals() {
     /* install signal handler for SIGINT, SIGHUP */
     struct sigaction sa;
     sa.sa_handler = signal_handler;
@@ -280,7 +381,32 @@ void run() {
     sigaddset(&sigset, SIGUSR1);
     sigprocmask(SIG_BLOCK, &sigset, &oldset);
 
+    return oldset;
+}
+
+void run() {
+    fprintf(stderr, LOG_PREFIX "Starting bar...\n");
+    fprintf(stderr, LOG_PREFIX "FIFO file: %s\n", fifo_path);
+
+    /* expand full blocks path in case it has '~' or any env variables */
     expand_blocks_path();
+
+    /* set periodical updates */
+    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
+        die(LOG_PREFIX "pthread_create() failed");
+    }
+
+    /* start services */
+    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
+        // fprintf(stderr, DEBUG_LOG_PREFIX "Pre-start service: %s, block: %d\n", services[i].command, services[i].block);
+
+        if (pthread_create(&services_thread_id[i], NULL, &run_service, (void *)&services[i])) {
+            die(LOG_PREFIX "pthread_create() failed for service: %s", blocks[services[i].block].name);
+        }
+    }
+
+    /* setup signals, store old set for pselect */
+    sigset_t oldset = setup_signals();
 
     char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
     char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
@@ -374,10 +500,16 @@ void run() {
 
 void cleanup() {
     fprintf(stderr, LOG_PREFIX "Cleaning up...\n");
+
+    remove_fifo_if_exists();
+
     pthread_mutex_destroy(&run_command_lock);
     pthread_mutex_destroy(&update_status_lock);
     pthread_join(updater_thread_id, NULL);
-    remove_fifo_if_exists();
+
+    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
+        pthread_join(services_thread_id[i], NULL);
+    }
 }
 
 int main(int argc, char **argv) {

@@ -4,25 +4,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "util.h"
 
 /* die() is taken from dwm's util.c */
 void die(const char *fmt, ...) {
-  va_list ap;
+    va_list ap;
 
-  va_start(ap, fmt);
-  vfprintf(stderr, fmt, ap);
-  va_end(ap);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
 
-  if (fmt[0] && fmt[strlen(fmt)-1] == ':') {
-    fputc(' ', stderr);
-    perror(NULL);
-  } else {
-    fputc('\n', stderr);
-  }
+    if (fmt[0] && fmt[strlen(fmt) - 1] == ':') {
+        fputc(' ', stderr);
+        perror(NULL);
+    } else {
+        fputc('\n', stderr);
+    }
 
-  exit(1);
+    exit(1);
 }
 
 int is_number(const char *str, unsigned long buf_max_len) {
@@ -58,22 +59,50 @@ void copy_buffer(char *dst, const char *src, size_t size) {
 #endif
 }
 
-size_t remove_from_buffer(char *buf, char toRemove) {
-    size_t newSize = 0;
+size_t remove_from_buffer(char *buf, char to_remove) {
+    size_t new_size = 0;
     char *read = buf;
     char *write = buf;
 
     while (*read) {
         /* skip all char for removal */
-        while (*read == toRemove) {
+        while (*read == to_remove) {
             read++;
         }
-        /* set next valid char instead of 'toRemove' */
+        /* set next valid char instead of 'to_remove' */
         if (*write != *read) *write = *read;
 
         read++;
         write++;
-        newSize++;
+        new_size++;
     }
-    return newSize;
+    return new_size;
+}
+
+pid_t process_open(const char *program, int *pout) {
+    /* no stdin as we don't need to write to the process */
+    char *argp[] = {"sh", "-c", NULL, NULL};
+    int pd[2];
+    pid_t pid;
+
+    if (pipe(pd) < 0) return -1;
+
+    switch (pid = fork()) {
+    case -1: /* error */
+        (void)close(pd[0]);
+        (void)close(pd[1]);
+        return -1;
+    case 0: /* child */
+        (void)close(pd[0]);
+        (void)dup2(pd[1], STDOUT_FILENO);
+
+        argp[2] = (char *)program;
+        execve("/bin/sh", argp, NULL);
+        _exit(127);
+    }
+
+    /* parent */
+    (void)close(pd[1]);
+    *pout = pd[0];
+    return pid;
 }

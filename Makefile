@@ -43,8 +43,8 @@ install: all
 	mkdir -p ${DESTDIR}${MANPREFIX}/man1
 	sed "s/VERSION/${VERSION}/g" < dwmbar.1 > ${DESTDIR}${MANPREFIX}/man1/dwmbar.1
 	chmod 644 ${DESTDIR}${MANPREFIX}/man1/dwmbar.1
-	mkdir -p ${BLOCKSPREFIX}
-	cp -u blocks/* ${BLOCKSPREFIX}
+	mkdir -p ${DESTDIR}${BLOCKSPREFIX}
+	cp -u blocks/* ${DESTDIR}${BLOCKSPREFIX}
 
 uninstall:
 	rm -f ${DESTDIR}${PREFIX}/bin/dwmbar
