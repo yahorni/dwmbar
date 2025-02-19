@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = dwmbar.c
+SRC = dwmbar.c util.c
 OBJ = ${SRC:.c=.o}
 
 all: options dwmbar

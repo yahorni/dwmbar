@@ -1,4 +1,6 @@
-IndentWidth: 4
 ColumnLimit: 120
-SpacesBeforeTrailingComments: 2
+IndentWidth: 4
+UseTab: Never
+PointerAlignment: Right
 AllowShortIfStatementsOnASingleLine: WithoutElse
+SpacesBeforeTrailingComments: 2
