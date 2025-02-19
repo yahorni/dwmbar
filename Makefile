@@ -1,40 +1,54 @@
-PREFIX = ~/.local
-BLOCKS = $(PREFIX)/share/dwmbar/blocks
-SOURCES = dwmbar.c
-BINARY = dwmbar
+# dwmbar - simple bar for dwm
+# See LICENSE file for copyright and license details.
 
-.PHONY: config build install run restart install-blocks uninstall clean
-default: build install restart
+include config.mk
 
-config:
-	[ -f config.h ] || cp config.def.h config.h
+SRC = dwmbar.c
+OBJ = ${SRC:.c=.o}
 
-build: config
-	$(CC) -Wall -Wextra -pedantic -o $(BINARY) $(SOURCES) -lpthread -lX11
+all: options dwmbar
 
-install:
-	[ -f "$(BINARY)" ] || exit 1
-	mkdir -p $(PREFIX)/bin
-	cp -f {$(BINARY),dwmlistener.sh} $(PREFIX)/bin
-	chmod 755 $(PREFIX)/bin/{$(BINARY),dwmlistener.sh}
+options:
+	@echo dwmbar build options:
+	@echo "CFLAGS   = ${CFLAGS}"
+	@echo "LDFLAGS  = ${LDFLAGS}"
+	@echo "CC       = ${CC}"
 
-run:
-	./$(BINARY)
+.c.o:
+	${CC} -c ${CFLAGS} $<
 
-restart:
-	if pgrep dwmbar ; then \
-		pkill -USR1 $(BINARY) ;\
-	fi
+${OBJ}: config.h config.mk
 
-kill:
-	pkill $(BINARY)
+config.h:
+	cp config.def.h $@
 
-install-blocks:
-	mkdir -p $(BLOCKS)
-	cp -rn blocks/* $(BLOCKS)
-
-uninstall:
-	rm $(PREFIX)/bin/{$(BINARY),dwmlistener.sh}
+dwmbar: ${OBJ}
+	${CC} -o $@ ${OBJ} ${LDFLAGS}
 
 clean:
-	rm -f $(BINARY)
+	rm -f dwmbar ${OBJ} dwmbar-${VERSION}.tar.gz
+
+dist: clean
+	mkdir -p dwmbar-${VERSION}
+	cp -R LICENSE Makefile README.md config.def.h config.mk\
+		blocks/ dwmbar.1 ${SRC} dwmbar-${VERSION}
+	tar -cf dwmbar-${VERSION}.tar dwmbar-${VERSION}
+	gzip dwmbar-${VERSION}.tar
+	rm -rf dwmbar-${VERSION}
+
+install: all
+	mkdir -p ${DESTDIR}${PREFIX}/bin
+	cp -f dwmbar ${DESTDIR}${PREFIX}/bin
+	chmod 755 ${DESTDIR}${PREFIX}/bin/dwmbar
+	mkdir -p ${DESTDIR}${MANPREFIX}/man1
+	sed "s/VERSION/${VERSION}/g" < dwmbar.1 > ${DESTDIR}${MANPREFIX}/man1/dwmbar.1
+	chmod 644 ${DESTDIR}${MANPREFIX}/man1/dwmbar.1
+	mkdir -p ${BLOCKSPREFIX}
+	cp -u blocks/* ${BLOCKSPREFIX}
+
+uninstall:
+	rm -f ${DESTDIR}${PREFIX}/bin/dwmbar
+	rm -f ${DESTDIR}${MANPREFIX}/man1/dwmbar.1
+	rm -rf ${DESTDIR}${BLOCKSPREFIX}
+
+.PHONY: all options clean dist install uninstall

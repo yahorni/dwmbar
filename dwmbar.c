@@ -1,4 +1,3 @@
-#define _POSIX_C_SOURCE 200809L
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <X11/Xlib.h>
 #include <ctype.h>
@@ -224,13 +223,13 @@ int isNumber(const char *str, unsigned long buf_max_len) {
 
 void expandBlockCommands() {
     wordexp_t exp_result;
-    wordexp(BLOCKS, &exp_result, 0);
+    wordexp(BLOCKSPREFIX, &exp_result, 0);
     copyBuffer(blocks_path, exp_result.we_wordv[0], BLOCKS_PATH_MAX_LEN);
 }
 
 void removeFifoIfExists() {
     if (unlink(fifoPath) == 0) {
-        fprintf(stderr, LOG_PREFIX "Removed old file: %s\n", fifoPath);
+        fprintf(stderr, LOG_PREFIX "Removed FIFO: %s\n", fifoPath);
     } else if (errno != ENOENT) {
         perror(LOG_PREFIX "unlink() failed");
         return;
@@ -318,14 +317,14 @@ int main(int argc, char **argv) {
     createFifo();
 
     while (isRunning) {
-        fprintf(stderr, LOG_PREFIX "Opening fifo: %s\n", fifoPath);
+        fprintf(stderr, LOG_PREFIX "Opening FIFO: %s\n", fifoPath);
         int fifoFd = -1;
         if ((fifoFd = openFifo()) < 0) {
-            fprintf(stderr, LOG_PREFIX "Failed to create fifo: %s", fifoPath);
+            fprintf(stderr, LOG_PREFIX "Failed to create FIFO: %s", fifoPath);
             return 1;
         }
 
-        fprintf(stderr, LOG_PREFIX "Start reading fifo\n");
+        fprintf(stderr, LOG_PREFIX "Start reading FIFO\n");
         while (isRunning) {
             unsigned int button = 0;
             resetBuffer(fifoBuffer, FIFO_BUFFER_LEN);
@@ -390,7 +389,7 @@ int main(int argc, char **argv) {
             updateStatus();
         }
 
-        fprintf(stderr, LOG_PREFIX "Closing fifo...\n");
+        fprintf(stderr, LOG_PREFIX "Closing FIFO...\n");
         if (close(fifoFd) < 0) {
             perror(LOG_PREFIX "close() failed");
             break;
