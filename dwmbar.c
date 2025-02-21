@@ -18,18 +18,6 @@
 
 #include "util.h"
 
-#define BAR_LEN 510
-#define BLOCKS_PATH_LEN 250
-#define BLOCK_CMD_LEN 510
-#define BLOCK_OUTPUT_LEN 60
-#define FIFO_BUFFER_LEN 250
-#define EMPTY_CMD_OUTPUT "..."
-#define SERVICE_READ_BUFFER_LEN 510
-
-#define LOG_PREFIX "dwmbar: "
-#define DEBUG_LOG_PREFIX "dwmbar(debug): "
-#define ERROR_LOG_PREFIX "dwmbar(error): "
-
 typedef struct {
     char *name;
     char *command;
@@ -43,71 +31,118 @@ typedef struct {
     char *pattern;
 } Service;
 
-/* function declarations */
+/* configuration */
 
-static void set_status(char *status);
-static void update_status();
-static void run_command(const Block *block, char *output, int button);
-static size_t get_block_index(const char *name);
+#include "config.h"
 
-static void *periodic_updater(void *vargp);
-static void *run_service(void *vargp);
-static void run_oneshot_process(Service *service);
-static void run_continuous_process(Service *service);
-static void stop_service(pid_t pid, char *command);
+/* definitions */
 
-static void signal_handler(int signum);
-static void restart_handler(int signum);
+// TODO: make configurable
+#define BAR_LEN 510
+#define BLOCK_OUTPUT_LEN 70
 
-static void expand_blocks_path();
-static void remove_fifo_if_exists();
-static void create_fifo();
-static int open_fifo();
+#define BLOCKS_AMOUNT (sizeof(blocks) / sizeof(blocks[0]))
+#define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
+#define EMPTY_BLOCK_SIZE (sizeof(empty_block) / sizeof(empty_block[0]))
 
-static void run();
-static void cleanup();
+#define BLOCKS_PATH_LEN 250
+#define BLOCK_CMD_LEN 510
+#define FIFO_BUFFER_LEN 250
+#define SERVICE_READ_BUFFER_LEN 510
+
+#define ERROR_LOG_PREFIX "dwmbar(error): "
+#define WARN_LOG_PREFIX "dwmbar(warn ): "
+#define INFO_LOG_PREFIX "dwmbar(info ): "
+#define DEBUG_LOG_PREFIX "dwmbar(debug): "
+
+#define SERVICE_PREFIX "service '%s': "
+
+/* internal types */
+
+typedef struct {
+    Service *service;
+    int pipe_fd;
+} ServiceThreadArgs;
+
+typedef struct {
+    char *command;
+    int block;
+    int pipe_fd;
+    char *read_buffer;
+    pid_t pid;
+    int process_fd;
+} ServiceContext;
 
 /* variables */
+
+// status bar
 static char old_status[BAR_LEN + 1];
 static char new_status[BAR_LEN + 1];
+
+// blocks
 static char current_command[BLOCK_CMD_LEN + 1];
 static char blocks_path[BLOCKS_PATH_LEN + 1];
+static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_LEN + 1];
 
+// X11
 static Display *dpy;
 static int screen;
 static Window root_window;
 
+// periodic_updater
+static pthread_t updater_thread_id;
+static pthread_mutex_t update_status_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// services
+static pthread_t services_thread_id[SERVICES_AMOUNT];
+static int services_pipes[SERVICES_AMOUNT][2];
+static ServiceThreadArgs service_args[SERVICES_AMOUNT];
+
+// execution flow
 volatile sig_atomic_t is_running = 1;
 static int is_restart = 0;
 
-pthread_t updater_thread_id;
-pthread_mutex_t update_status_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
+/* function declarations */
 
-/* configuration, allows nested code to access above variables */
-#include "config.h"
+// status bar
+static void update_status_buffer();
+static void set_x11_status(char *status);
 
-#define BLOCKS_AMOUNT (sizeof(blocks) / sizeof(blocks[0]))
-static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_LEN + 1];
+// blocks
+static void run_block_command(const Block *block, char *output, int button);
+static void expand_blocks_path();
+static size_t get_block_index(const char *name);
 
-#define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
-static pthread_t services_thread_id[SERVICES_AMOUNT];
+// periodic updater
+static void *periodic_updater(void *vargp);
+
+// services
+static void *run_service(void *vargp);
+static void run_oneshot_service(ServiceContext *ctx);
+static void run_continuous_service(ServiceContext *ctx);
+static int read_from_service_fd(ServiceContext *ctx);
+static void stop_service(ServiceContext *ctx);
+
+// signals
+static void signal_handler(int signum);
+static void restart_handler(int signum);
+sigset_t setup_signals();
+
+// fifo
+static int remove_fifo_if_exists();
+static int create_fifo();
+static int open_fifo();
+
+// execution flow
+static void run();
+static void run_periodic_updates();
+static void run_services();
+static void cleanup();
 
 /* function implementations */
 
-void set_status(char *status) {
-    if (!(dpy = XOpenDisplay(NULL))) {
-        fprintf(stderr, LOG_PREFIX "cannot open display");
-        is_running = 0;
-    }
-    screen = DefaultScreen(dpy);
-    root_window = RootWindow(dpy, screen);
-    // fprintf(stderr, DEBUG_LOG_PREFIX "new status:\n%s\n", new_status);
-    XStoreName(dpy, root_window, status);
-    XCloseDisplay(dpy);
-}
-
-void update_status() {
+void update_status_buffer() {
     pthread_mutex_lock(&update_status_lock);
 
     /* position where to start writing */
@@ -140,7 +175,7 @@ void update_status() {
     copy_buffer(old_status, new_status, BAR_LEN);
 
     /* update status */
-    set_status(new_status);
+    set_x11_status(new_status);
 
     /* clear new status */
     reset_buffer(new_status, BAR_LEN);
@@ -148,34 +183,47 @@ void update_status() {
     pthread_mutex_unlock(&update_status_lock);
 }
 
+void set_x11_status(char *status) {
+    if (!(dpy = XOpenDisplay(NULL))) {
+        fprintf(stderr, ERROR_LOG_PREFIX "cannot open display");
+        is_running = 0;
+    }
+    screen = DefaultScreen(dpy);
+    root_window = RootWindow(dpy, screen);
+    // fprintf(stderr, DEBUG_LOG_PREFIX "new status:\n%s\n", new_status);
+    XStoreName(dpy, root_window, status);
+    XCloseDisplay(dpy);
+}
+
+
 /* Opens process *current_command and stores output in *output */
-void run_command(const Block *block, char *output, int button) {
+void run_block_command(const Block *block, char *output, int button) {
     pthread_mutex_lock(&run_command_lock);
 
     reset_buffer(output, BLOCK_OUTPUT_LEN);
     reset_buffer(current_command, BLOCK_CMD_LEN);
 
-    copy_buffer(output, EMPTY_CMD_OUTPUT, sizeof(EMPTY_CMD_OUTPUT));
+    copy_buffer(output, empty_block, EMPTY_BLOCK_SIZE);
 
     FILE *command_file;
     if (button) {
         sprintf(current_command, "BLOCK_BUTTON=%d %s/%s", button, blocks_path, block->command);
-        button = 0;
     } else {
         sprintf(current_command, "%s/%s", blocks_path, block->command);
     }
-    // fprintf(stderr, DEBUG_LOG_PREFIX "executing: '%s'\n", current_command);
 
+    // fprintf(stderr, DEBUG_LOG_PREFIX "executing: '%s'\n", current_command);
     if (!(command_file = popen(current_command, "r"))) {
-        fprintf(stderr, LOG_PREFIX "Failed to execute: '%s'\n", current_command);
+        fprintf(stderr, ERROR_LOG_PREFIX "failed to execute: '%s'\n", current_command);
         return;
     }
 
+    // FIXME?: blocking call
     if (fgets(output, BLOCK_OUTPUT_LEN, command_file)) {
         int new_size = remove_from_buffer(output, '\n');
         output[new_size] = '\0';
     } else {
-        fprintf(stderr, LOG_PREFIX "Failed to read command output: '%s'\n", current_command);
+        fprintf(stderr, WARN_LOG_PREFIX "failed to read command output: '%s'\n", current_command);
         // FIXME: not sure what to do here
     }
 
@@ -203,10 +251,10 @@ void *periodic_updater(void *vargp) {
         for (size_t i = 0; i < BLOCKS_AMOUNT; i++) {
             current_block = blocks + i;
             if (time % current_block->interval == 0) {
-                run_command(current_block, blocks_cache[i], 0);
+                run_block_command(current_block, blocks_cache[i], 0);
             }
         }
-        update_status();
+        update_status_buffer();
         sleep(1);
         time++;
     }
@@ -215,146 +263,134 @@ void *periodic_updater(void *vargp) {
 }
 
 void *run_service(void *vargp) {
-    Service *service = vargp;
-    fprintf(stderr, LOG_PREFIX "Starting service '%s' for block '%s'\n", service->command, blocks[service->block].name);
+    ServiceThreadArgs *args = vargp;
+    char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
+    ServiceContext ctx = {
+        .command = args->service->command,
+        .block = args->service->block,
+        .pipe_fd = args->pipe_fd,
+        .read_buffer = read_buffer,
+    };
 
-    if (service->oneshot) {
-        run_oneshot_process(service);
-    } else {
-        run_continuous_process(service);
-    }
+    fprintf(stderr, INFO_LOG_PREFIX SERVICE_PREFIX "starting for block '%s'\n", ctx.command, blocks[ctx.block].name);
+
+    if (args->service->oneshot)
+        run_oneshot_service(&ctx);
+    else
+        run_continuous_service(&ctx);
 
     return NULL;
 }
 
-void run_oneshot_process(Service *service) {
-    int block = service->block;
-    char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
-    int pout;
-    pid_t pid;
-    FILE *process_output;
-
-    // TODO: wait for oneshot process to finish first, then parse output and return code
-    // use standard popen()?
+void run_oneshot_service(ServiceContext *ctx) {
     while (is_running) {
-        if ((pid = process_open(service->command, &pout)) == -1) {
-            fprintf(stderr, ERROR_LOG_PREFIX "Failed to run service: '%s'\n", service->command);
+        if ((ctx->pid = process_open(ctx->command, &ctx->process_fd)) == -1) {
+            fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to run: ", ctx->command);
+            perror(NULL);
             return;
         }
 
-        if (!(process_output = fdopen(pout, "r"))) {
-            fprintf(stderr, ERROR_LOG_PREFIX "Failed to open service output: '%s'\n", service->command);
-            stop_service(pid, service->command);
-            return;
+        if (read_from_service_fd(ctx)) {
+            run_block_command(&blocks[ctx->block], blocks_cache[ctx->block], 0);
+            update_status_buffer();
         }
 
-        fgets(read_buffer, SERVICE_READ_BUFFER_LEN, process_output);
-        fprintf(stderr, DEBUG_LOG_PREFIX "Service read: '%s'\n", service->command);
-
-        run_command(&blocks[block], blocks_cache[block], 0);
-        update_status();
+        stop_service(ctx);
     }
 }
 
-void run_continuous_process(Service *service) {
-    int block = service->block;
-    char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
-
-    int pout;
-    pid_t pid;
-    FILE *process_output;
-
-    if ((pid = process_open(service->command, &pout)) == -1) {
-        fprintf(stderr, ERROR_LOG_PREFIX "Failed to run service: '%s'\n", service->command);
+void run_continuous_service(ServiceContext *ctx) {
+    if ((ctx->pid = process_open(ctx->command, &ctx->process_fd)) == -1) {
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to run: ", ctx->command);
+        perror(NULL);
         return;
     }
 
-    if (!(process_output = fdopen(pout, "r"))) {
-        fprintf(stderr, ERROR_LOG_PREFIX "Failed to open service output: '%s'\n", service->command);
-        stop_service(pid, service->command);
-        return;
+    while (is_running) {
+        if (read_from_service_fd(ctx)) {
+            run_block_command(&blocks[ctx->block], blocks_cache[ctx->block], 0);
+            update_status_buffer();
+        } else {
+            stop_service(ctx);
+            return;
+        }
     }
-
-    while (is_running && fgets(read_buffer, SERVICE_READ_BUFFER_LEN, process_output)) {
-        fprintf(stderr, DEBUG_LOG_PREFIX "Service read: '%s'\n", service->command);
-        run_command(&blocks[block], blocks_cache[block], 0);
-        update_status();
-    }
-
-    stop_service(pid, service->command);
 }
 
-void stop_service(pid_t pid, char *command) {
-    if (kill(pid, 0) == ESRCH) {
-        fprintf(stderr, ERROR_LOG_PREFIX "Service '%s' already terminated\n", command);
-        return;
+int read_from_service_fd(ServiceContext *ctx) {
+    /* no need to check max(process_fd, pipe_fd) as pipe_fd created earlier */
+    int nfds = ctx->process_fd + 1;
+    fd_set read_fds;
+
+    FD_ZERO(&read_fds);
+    FD_SET(ctx->process_fd, &read_fds);
+    FD_SET(ctx->pipe_fd, &read_fds);
+
+    if (select(nfds, &read_fds, NULL, NULL, NULL) < 0) {
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "select() error: ", ctx->command);
+        perror(NULL);
+        return 0;
     }
 
-    if (kill(pid, SIGTERM)) {
-        fprintf(stderr, ERROR_LOG_PREFIX "Failed to terminate service: '%s'\n", command);
+    if (FD_ISSET(ctx->process_fd, &read_fds)) {
+        fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "ready to read\n", ctx->command);
+
+        int nread = read(ctx->process_fd, ctx->read_buffer, SERVICE_READ_BUFFER_LEN);
+        // TODO: handle multiple read failed to not run infinitely
+        if (nread < 0) {
+            fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "read() failed", ctx->command);
+            perror(NULL);
+            return 0;
+        }
+
+        if (nread > 0) {
+            ctx->read_buffer[nread - 1] = '\0';
+            fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "message: %s\n", ctx->command, ctx->read_buffer);
+        } else {
+            fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "read() received EOF\n", ctx->command);
+        }
+        return 1;
+
+    } else if (FD_ISSET(ctx->pipe_fd, &read_fds)) {
+        fprintf(stderr, INFO_LOG_PREFIX SERVICE_PREFIX "received message to stop\n", ctx->command);
+        return 0;
+    }
+
+    /* unreachable? */
+    fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "unreachable reading condition\n", ctx->command);
+    return 0;
+}
+
+void stop_service(ServiceContext *ctx) {
+    /* close process output pipe */
+    if (close(ctx->process_fd)) {
+        fprintf(stderr, WARN_LOG_PREFIX SERVICE_PREFIX "error while closing fd pipe: ", ctx->command);
+        perror(NULL);
+    }
+
+    /* finish process */
+    if (kill(ctx->pid, SIGTERM) < 0) {
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to terminate with SIGTERM", ctx->command);
+        perror(NULL);
+    }
+
+    /* ensure process finished */
+    if (kill(ctx->pid, 0) == ESRCH) {
+        fprintf(stderr, INFO_LOG_PREFIX SERVICE_PREFIX "already terminated\n", ctx->command);
+        return;
     }
 }
 
 void signal_handler(int signum) {
     // TODO: probably need to get rid of fprintf
     // https://stackoverflow.com/questions/16891019/how-to-avoid-using-printf-in-a-signal-handler
-    fprintf(stderr, LOG_PREFIX "Signal %d: %s. Stopping...\n", signum, strsignal(signum));
+    fprintf(stderr, INFO_LOG_PREFIX "signal %d: '%s', stopping...\n", signum, strsignal(signum));
     is_running = 0;
 }
 
 void restart_handler(int signum) {
     is_restart = 1;
     signal_handler(signum);
-}
-
-void expand_blocks_path() {
-    wordexp_t exp_result;
-    wordexp(BLOCKSPREFIX, &exp_result, 0);
-    copy_buffer(blocks_path, exp_result.we_wordv[0], BLOCKS_PATH_LEN);
-}
-
-void remove_fifo_if_exists() {
-    if (unlink(fifo_path) == 0) {
-        fprintf(stderr, LOG_PREFIX "Removed FIFO\n");
-    } else if (errno != ENOENT) {
-        perror(LOG_PREFIX "unlink() failed");
-        return;
-    }
-}
-
-void create_fifo() {
-    /* create fifo */
-    if (mkfifo(fifo_path, 0622) < 0) {
-        perror(LOG_PREFIX "mkfifo() failed");
-        return;
-    }
-}
-
-int open_fifo() {
-    // https://stackoverflow.com/questions/21468856/check-if-file-is-a-named-pipe-fifo-in-c#comment32401662_21468960
-
-    int fifo_fd = -1;
-
-    /* open fifo in non-block mode to check type */
-    if ((fifo_fd = open(fifo_path, O_RDWR | O_NONBLOCK)) < 0) {
-        perror(LOG_PREFIX "open() failed");
-        return -1;
-    }
-
-    /* read fifo stats */
-    struct stat fifo_stat;
-    if (fstat(fifo_fd, &fifo_stat) < 0) {
-        perror(LOG_PREFIX "fstat() failed");
-        return -1;
-    }
-
-    /* check that file is fifo */
-    if (!S_ISFIFO(fifo_stat.st_mode)) {
-        fprintf(stderr, LOG_PREFIX "Given file is not FIFO\n");
-        return -1;
-    }
-
-    return fifo_fd;
 }
 
 sigset_t setup_signals() {
@@ -384,90 +420,129 @@ sigset_t setup_signals() {
     return oldset;
 }
 
+void expand_blocks_path() {
+    wordexp_t expanded;
+    wordexp(BLOCKSPREFIX, &expanded, 0);
+    copy_buffer(blocks_path, expanded.we_wordv[0], BLOCKS_PATH_LEN);
+    wordfree(&expanded);
+}
+
+int remove_fifo_if_exists() {
+    if (unlink(fifo_path) == 0) {
+        fprintf(stderr, INFO_LOG_PREFIX "removed FIFO\n");
+        return 1;
+    } else if (errno != ENOENT) {
+        perror(WARN_LOG_PREFIX "unlink() failed");
+        return 0;
+    }
+    return 0;
+}
+
+int create_fifo() {
+    /* create fifo */
+    if (mkfifo(fifo_path, 0622) < 0) {
+        perror(WARN_LOG_PREFIX "mkfifo() failed");
+        return 0;
+    }
+    return 1;
+}
+
+int open_fifo() {
+    // https://stackoverflow.com/questions/21468856/check-if-file-is-a-named-pipe-fifo-in-c#comment32401662_21468960
+
+    int fifo_fd = -1;
+
+    /* open fifo in non-block mode to check type */
+    if ((fifo_fd = open(fifo_path, O_RDWR | O_NONBLOCK)) < 0) {
+        perror(ERROR_LOG_PREFIX "open() failed");
+        return -1;
+    }
+
+    /* read fifo stats */
+    struct stat fifo_stat;
+    if (fstat(fifo_fd, &fifo_stat) < 0) {
+        perror(ERROR_LOG_PREFIX "fstat() for FIFO failed");
+        return -1;
+    }
+
+    /* check that file is fifo */
+    if (!S_ISFIFO(fifo_stat.st_mode)) {
+        fprintf(stderr, ERROR_LOG_PREFIX "given file is not FIFO\n");
+        return -1;
+    }
+
+    return fifo_fd;
+}
+
 void run() {
-    fprintf(stderr, LOG_PREFIX "Starting bar...\n");
-    fprintf(stderr, LOG_PREFIX "FIFO file: %s\n", fifo_path);
+    fprintf(stderr, INFO_LOG_PREFIX "starting bar...\n");
+    fprintf(stderr, INFO_LOG_PREFIX "FIFO file: %s\n", fifo_path);
 
     /* expand full blocks path in case it has '~' or any env variables */
     expand_blocks_path();
 
-    /* set periodical updates */
-    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
-        die(LOG_PREFIX "pthread_create() failed");
-    }
-
-    /* start services */
-    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
-        // fprintf(stderr, DEBUG_LOG_PREFIX "Pre-start service: %s, block: %d\n", services[i].command, services[i].block);
-
-        if (pthread_create(&services_thread_id[i], NULL, &run_service, (void *)&services[i])) {
-            die(LOG_PREFIX "pthread_create() failed for service: %s", blocks[services[i].block].name);
-        }
-    }
-
     /* setup signals, store old set for pselect */
+    // TODO: do I really need oldset?
     sigset_t oldset = setup_signals();
 
     char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
     char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
 
-    fd_set read_fds;
-    fd_set error_fds;
-
     remove_fifo_if_exists();
-    create_fifo();
+    if (!create_fifo()) return;
+
+    run_periodic_updates();
+    run_services();
+
+    fd_set read_fds;
 
     while (is_running) {
-        fprintf(stderr, LOG_PREFIX "Opening FIFO...\n");
+        fprintf(stderr, INFO_LOG_PREFIX "opening FIFO...\n");
+
         int fifo_fd = -1;
         if ((fifo_fd = open_fifo()) < 0) {
-            fprintf(stderr, LOG_PREFIX "Failed to create FIFO");
+            fprintf(stderr, ERROR_LOG_PREFIX "failed to create FIFO");
             break;
         }
 
-        fprintf(stderr, LOG_PREFIX "Reading FIFO...\n");
+        fprintf(stderr, INFO_LOG_PREFIX "reading FIFO...\n");
         while (is_running) {
             unsigned int button = 0;
             reset_buffer(fifo_buffer, FIFO_BUFFER_LEN);
             reset_buffer(block_name_buffer, FIFO_BUFFER_LEN);
 
             FD_ZERO(&read_fds);
-            FD_ZERO(&error_fds);
             FD_SET(fifo_fd, &read_fds);
 
-            if (pselect(fifo_fd + 1, &read_fds, NULL, &error_fds, NULL, &oldset) < 0) {
-                perror(LOG_PREFIX "pselect() caught signal");
+            if (pselect(fifo_fd + 1, &read_fds, NULL, NULL, NULL, &oldset) < 0) {
+                // TODO: change message
+                perror(INFO_LOG_PREFIX "pselect() returned error");
                 is_running = 0;
                 break;
             }
 
-            if (FD_ISSET(fifo_fd, &error_fds)) {
-                fprintf(stderr, LOG_PREFIX "fifo fd error\n");
-                continue;
-            }
-
             if (!FD_ISSET(fifo_fd, &read_fds)) {
-                fprintf(stderr, LOG_PREFIX "fifo fd not in read fdset\n");
+                fprintf(stderr, WARN_LOG_PREFIX "FIFO fd not in read fdset\n");
                 continue;
             }
 
             int nread = read(fifo_fd, fifo_buffer, FIFO_BUFFER_LEN);
             if (nread < 0) {
-                perror(LOG_PREFIX "read() failed");
+                perror(ERROR_LOG_PREFIX "read() from FIFO failed");
                 continue;
             } else if (nread == 0) {
                 if (errno == EAGAIN) {
-                    fprintf(stderr, LOG_PREFIX "read() EAGAIN\n");
+                    fprintf(stderr, ERROR_LOG_PREFIX "read() from FIFO got EAGAIN\n");
                     continue;
                 } else {
-                    fprintf(stderr, LOG_PREFIX "read() received EOF\n");
-                    // perror(LOG_PREFIX "read() received EOF");
+                    fprintf(stderr, WARN_LOG_PREFIX "read() from FIFO received EOF\n");
+                    // perror(WARN_LOG_PREFIX "read() received EOF");
                     break;
                 }
             }
 
             if (sscanf(fifo_buffer, "%s %u\n", block_name_buffer, &button) < 0) {
-                perror(LOG_PREFIX "sscanf() failed");
+                perror(ERROR_LOG_PREFIX "sscanf() from FIFO failed");
                 continue;
             }
 
@@ -481,35 +556,65 @@ void run() {
                 /* used for updates coming from pipe */
                 block = get_block_index(block_name_buffer);
                 if (block == -1) {
-                    fprintf(stderr, LOG_PREFIX "Invalid block name: %s\n", block_name_buffer);
+                    fprintf(stderr, ERROR_LOG_PREFIX "invalid block name: %s\n", block_name_buffer);
                     continue;
                 }
             }
 
-            run_command(&blocks[block], blocks_cache[block], button);
-            update_status();
+            run_block_command(&blocks[block], blocks_cache[block], button);
+            update_status_buffer();
         }
 
-        fprintf(stderr, LOG_PREFIX "Closing FIFO...\n");
+        fprintf(stderr, INFO_LOG_PREFIX "closing FIFO...\n");
         if (close(fifo_fd) < 0) {
-            perror(LOG_PREFIX "close() failed");
+            perror(ERROR_LOG_PREFIX "close() failed");
             break;
         }
     }
 }
 
-void cleanup() {
-    fprintf(stderr, LOG_PREFIX "Cleaning up...\n");
+void run_periodic_updates() {
+    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
+        die(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
+    }
+}
 
-    remove_fifo_if_exists();
+void run_services() {
+    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
+        if (pipe(services_pipes[i]) < 0) {
+            fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
+            return;
+        }
+
+        service_args[i].service = (Service *)&services[i];
+        service_args[i].pipe_fd = services_pipes[i][0];
+
+        if (pthread_create(&services_thread_id[i], NULL, &run_service, (void *)&service_args[i])) {
+            die(ERROR_LOG_PREFIX "pthread_create() failed for service '%s'", services[i].command);
+        }
+    }
+}
+
+void cleanup() {
+    fprintf(stderr, INFO_LOG_PREFIX "cleaning up...\n");
 
     pthread_mutex_destroy(&run_command_lock);
     pthread_mutex_destroy(&update_status_lock);
     pthread_join(updater_thread_id, NULL);
 
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
+        const char *command = services[i].command;
+        write(services_pipes[i][1], "", 1);
+        fprintf(stderr, DEBUG_LOG_PREFIX "waiting for service '%s'\n", command);
         pthread_join(services_thread_id[i], NULL);
+        fprintf(stderr, DEBUG_LOG_PREFIX "finished service '%s'\n", command);
+
+        // check if valgrind complains on open fds
+        // close(services_pipes[i][0]);
+        // close(services_pipes[i][1]);
     }
+
+    remove_fifo_if_exists();
 }
 
 int main(int argc, char **argv) {

@@ -4,6 +4,7 @@
 
 /* die() is taken from dwm's util.h */
 void die(const char *fmt, ...);
+
 int is_number(const char *str, unsigned long buf_max_len);
 
 void reset_buffer(char *buf, size_t size);

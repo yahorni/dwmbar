@@ -16,8 +16,8 @@ LIBS = -lpthread -lX11
 
 # flags
 CPPFLAGS = -D_POSIX_C_SOURCE=200809L -DVERSION=\"${VERSION}\" -DBLOCKSPREFIX=\"${DESTDIR}${BLOCKSPREFIX}\"
-CFLAGS   = -g -std=c99 -pedantic -Wall -O0 ${INCS} ${CPPFLAGS}
-# CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Wno-deprecated-declarations -Os ${INCS} ${CPPFLAGS}
+# CFLAGS   = -g -std=c99 -pedantic -Wall -O0 ${INCS} ${CPPFLAGS}
+CFLAGS   = -std=c99 -pedantic -Wall -Wextra -Wno-deprecated-declarations -Os ${INCS} ${CPPFLAGS}
 LDFLAGS  = ${LIBS}
 
 # compiler and linker

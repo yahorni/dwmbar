@@ -79,30 +79,34 @@ size_t remove_from_buffer(char *buf, char to_remove) {
     return new_size;
 }
 
+/* simple popen2 implementation */
+
+extern char **environ;
+
 pid_t process_open(const char *program, int *pout) {
     /* no stdin as we don't need to write to the process */
     char *argp[] = {"sh", "-c", NULL, NULL};
-    int pd[2];
+    int pipe_fds[2];
     pid_t pid;
 
-    if (pipe(pd) < 0) return -1;
+    if (pipe(pipe_fds) < 0) return -1;
 
     switch (pid = fork()) {
     case -1: /* error */
-        (void)close(pd[0]);
-        (void)close(pd[1]);
+        (void)close(pipe_fds[0]);
+        (void)close(pipe_fds[1]);
         return -1;
     case 0: /* child */
-        (void)close(pd[0]);
-        (void)dup2(pd[1], STDOUT_FILENO);
+        (void)close(pipe_fds[0]);
+        (void)dup2(pipe_fds[1], STDOUT_FILENO);
 
         argp[2] = (char *)program;
-        execve("/bin/sh", argp, NULL);
+        execve("/bin/sh", argp, environ);
         _exit(127);
     }
 
     /* parent */
-    (void)close(pd[1]);
-    *pout = pd[0];
+    (void)close(pipe_fds[1]);
+    *pout = pipe_fds[0];
     return pid;
 }
