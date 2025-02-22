@@ -81,11 +81,13 @@ typedef struct {
 /* status bar */
 static char old_status[BAR_LEN + 1];
 static char new_status[BAR_LEN + 1];
+static pthread_mutex_t update_status_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* blocks */
 static char current_command[BLOCK_CMD_LEN + 1];
 static char blocks_path[BLOCKS_PATH_LEN + 1];
 static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_LEN + 1];
+static pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* X11 */
 static Display *dpy;
@@ -94,13 +96,11 @@ static Window root_window;
 
 /* periodic_updater */
 static pthread_t updater_thread_id;
-static pthread_mutex_t update_status_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* services */
-static pthread_t services_thread_id[SERVICES_AMOUNT];
+static pthread_t services_thread_ids[SERVICES_AMOUNT];
 static int services_pipes[SERVICES_AMOUNT][2];
-static ServiceThreadArgs service_args[SERVICES_AMOUNT];
+static ServiceThreadArgs services_args[SERVICES_AMOUNT];
 
 /* execution flow */
 volatile sig_atomic_t is_running = 1;
@@ -230,6 +230,7 @@ void run_block_command(int block_index, int button) {
     // fprintf(stderr, DEBUG_LOG_PREFIX "executing: '%s'\n", current_command);
     if (!(command_file = popen(current_command, "r"))) {
         fprintf(stderr, ERROR_LOG_PREFIX "failed to execute: '%s'\n", current_command);
+        pthread_mutex_unlock(&run_command_lock);
         return;
     }
 
@@ -410,19 +411,24 @@ void restart_handler(int signum) {
 }
 
 sigset_t setup_signals() {
-    /* install signal handler for SIGINT, SIGHUP */
+    /* install signal handlers */
     struct sigaction sa;
     sa.sa_handler = signal_handler;
     sa.sa_flags = 0;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
+    /* dmw is finishing */
     sigaction(SIGHUP, &sa, NULL);
+    /* kill -9 */
+    sigaction(SIGINT, &sa, NULL);
+    /* kill */
+    sigaction(SIGTERM, &sa, NULL);
 
     /* install SIGUSR1 for restarting */
     struct sigaction rsa;
     rsa.sa_handler = restart_handler;
     rsa.sa_flags = 0;
     sigemptyset(&rsa.sa_mask);
+    /* kill -USR1 */
     sigaction(SIGUSR1, &rsa, NULL);
 
     /* block signals */
@@ -430,6 +436,7 @@ sigset_t setup_signals() {
     sigemptyset(&sigset);
     sigaddset(&sigset, SIGINT);
     sigaddset(&sigset, SIGHUP);
+    sigaddset(&sigset, SIGTERM);
     sigaddset(&sigset, SIGUSR1);
     sigprocmask(SIG_BLOCK, &sigset, &oldset);
 
@@ -607,10 +614,10 @@ void start_services() {
             return;
         }
 
-        service_args[i].service = (Service *)&services[i];
-        service_args[i].pipe_fd = services_pipes[i][0];
+        services_args[i].service = (Service *)&services[i];
+        services_args[i].pipe_fd = services_pipes[i][0];
 
-        if (pthread_create(&services_thread_id[i], NULL, &run_service, (void *)&service_args[i])) {
+        if (pthread_create(&services_thread_ids[i], NULL, &run_service, (void *)&services_args[i])) {
             die(ERROR_LOG_PREFIX "pthread_create() failed for service '%s'", services[i].command);
         }
     }
@@ -627,7 +634,7 @@ void cleanup() {
         const char *command = services[i].command;
         write(services_pipes[i][1], "", 1);
         fprintf(stderr, DEBUG_LOG_PREFIX "waiting for service '%s'\n", command);
-        pthread_join(services_thread_id[i], NULL);
+        pthread_join(services_thread_ids[i], NULL);
         fprintf(stderr, DEBUG_LOG_PREFIX "finished service '%s'\n", command);
 
         close(services_pipes[i][0]);
