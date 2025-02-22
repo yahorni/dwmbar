@@ -36,12 +36,13 @@ typedef struct {
 
 #include "config.h"
 
-
 /* definitions */
 
 #define BAR_LEN 1000
 /* compile time check for block length */
-struct BlockLenCheck { char block_longer_than_bar[BLOCK_OUTPUT_LEN > BAR_LEN ? -1 : 1]; };
+struct BlockLenCheck {
+    char block_longer_than_bar[BLOCK_OUTPUT_LEN > BAR_LEN ? -1 : 1];
+};
 
 #define BLOCKS_AMOUNT (sizeof(blocks) / sizeof(blocks[0]))
 #define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
@@ -77,70 +78,71 @@ typedef struct {
 
 /* variables */
 
-// status bar
+/* status bar */
 static char old_status[BAR_LEN + 1];
 static char new_status[BAR_LEN + 1];
 
-// blocks
+/* blocks */
 static char current_command[BLOCK_CMD_LEN + 1];
 static char blocks_path[BLOCKS_PATH_LEN + 1];
 static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_LEN + 1];
 
-// X11
+/* X11 */
 static Display *dpy;
 static int screen;
 static Window root_window;
 
-// periodic_updater
+/* periodic_updater */
 static pthread_t updater_thread_id;
 static pthread_mutex_t update_status_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// services
+/* services */
 static pthread_t services_thread_id[SERVICES_AMOUNT];
 static int services_pipes[SERVICES_AMOUNT][2];
 static ServiceThreadArgs service_args[SERVICES_AMOUNT];
 
-// execution flow
+/* execution flow */
 volatile sig_atomic_t is_running = 1;
 static int is_restart = 0;
 
 /* function declarations */
 
-// status bar
+/* status bar */
 static void update_status_buffer();
 static void set_x11_status(char *status);
 
-// blocks
+/* blocks */
 static void expand_blocks_path();
 static void run_block_command(int block_index, int button);
 static int get_block_index(const char *name);
 
-// periodic updater
+/* periodic updater */
 static void *periodic_updater(void *vargp);
 
-// services
+/* services */
 static void *run_service(void *vargp);
 static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
-static int read_from_service(ServiceContext *ctx);
+static bool read_from_service(ServiceContext *ctx);
 static void stop_service(ServiceContext *ctx);
 
-// signals
+/* signals */
 static void signal_handler(int signum);
 static void restart_handler(int signum);
 sigset_t setup_signals();
 
-// fifo
+/* fifo */
 static int create_fifo();
 static int open_fifo();
 static int remove_fifo_if_exists();
 static int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset);
 
-// execution flow
+/* execution flow */
 static void run();
-static void run_periodic_updates();
-static void run_services();
+static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
+static void start_periodic_updates();
+static void start_services();
 static void cleanup();
 
 /* function implementations */
@@ -156,8 +158,7 @@ void update_status_buffer() {
         /* check i > 0 to skip first block */
         if (i && k + delimiter_width < BAR_LEN - 1) {
             if (with_spaces) new_status[k++] = ' ';
-            if (delimiter)
-                new_status[k++] = delimiter;
+            if (delimiter) new_status[k++] = delimiter;
             new_status[k++] = '\n';
             if (with_spaces) new_status[k++] = ' ';
         }
@@ -332,7 +333,7 @@ void run_continuous_service(ServiceContext *ctx) {
     }
 }
 
-int read_from_service(ServiceContext *ctx) {
+bool read_from_service(ServiceContext *ctx) {
     /* no need to check max(process_fd, pipe_fd) as pipe_fd created earlier */
     int nfds = ctx->process_fd + 1;
     fd_set read_fds;
@@ -351,7 +352,7 @@ int read_from_service(ServiceContext *ctx) {
         fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "ready to read\n", ctx->command);
 
         int nread = read(ctx->process_fd, ctx->read_buffer, SERVICE_READ_BUFFER_LEN);
-        // TODO: handle multiple read failed to not run infinitely
+        /* TODO: handle multiple read failed to not run infinitely */
         if (nread < 0) {
             fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "read() failed", ctx->command);
             perror(NULL);
@@ -397,8 +398,8 @@ void stop_service(ServiceContext *ctx) {
 }
 
 void signal_handler(int signum) {
-    // TODO: probably need to get rid of fprintf
-    // https://stackoverflow.com/questions/16891019/how-to-avoid-using-printf-in-a-signal-handler
+    /* TODO: probably need to get rid of fprintf */
+    /* https://stackoverflow.com/questions/16891019/how-to-avoid-using-printf-in-a-signal-handler */
     fprintf(stderr, INFO_LOG_PREFIX "signal %d: '%s', stopping...\n", signum, strsignal(signum));
     is_running = 0;
 }
@@ -491,24 +492,24 @@ int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset) {
     if (pselect(fifo_fd + 1, &read_fds, NULL, NULL, NULL, sigset) < 0) {
         fprintf(stderr, WARN_LOG_PREFIX "pselect() error: ");
         perror(NULL);
-        return false;
+        return -1;
     }
 
     if (!FD_ISSET(fifo_fd, &read_fds)) {
         fprintf(stderr, WARN_LOG_PREFIX "FIFO fd not in read fdset\n");
-        return false;
+        return -1;
     }
 
     int nread = read(fifo_fd, fifo_buffer, FIFO_BUFFER_LEN);
     if (nread < 0) {
         perror(ERROR_LOG_PREFIX "read() from FIFO failed");
-        return false;
+        return -1;
     } else if (nread == 0) {
         fprintf(stderr, WARN_LOG_PREFIX "read() from FIFO received EOF\n");
-        return true;
+        return nread;
     }
 
-    return true;
+    return nread;
 }
 
 void run() {
@@ -527,8 +528,8 @@ void run() {
     remove_fifo_if_exists();
     if (!create_fifo()) return;
 
-    run_periodic_updates();
-    run_services();
+    start_periodic_updates();
+    start_services();
 
     while (is_running) {
         fprintf(stderr, INFO_LOG_PREFIX "opening FIFO...\n");
@@ -541,38 +542,11 @@ void run() {
 
         fprintf(stderr, INFO_LOG_PREFIX "reading FIFO...\n");
         while (is_running) {
-            int button;
             reset_buffer(fifo_buffer, FIFO_BUFFER_LEN);
             reset_buffer(block_name_buffer, FIFO_BUFFER_LEN);
 
-            if (read_from_fifo(fifo_fd, fifo_buffer, &oldset)) {
-                if (sscanf(fifo_buffer, "%s %d\n", block_name_buffer, &button) < 0) {
-                    perror(ERROR_LOG_PREFIX "FIFO data parsing failed");
-                    continue;
-                } else {
-                    fprintf(stderr, DEBUG_LOG_PREFIX "FIFO command: '%s %u'\n", block_name_buffer, button);
-                }
-            } else {
-                break;
-            }
-
-            int block_index = 0;
-            if (is_number(block_name_buffer, FIFO_BUFFER_LEN)) {
-                /* used for direct clicks on bar */
-                block_index = atoi(block_name_buffer);
-                /* input block starts with 1, not 0, so we decrease it */
-                block_index--;
-            } else {
-                /* used for updates coming from pipe */
-                block_index = get_block_index(block_name_buffer);
-                if (block_index == -1) {
-                    fprintf(stderr, ERROR_LOG_PREFIX "invalid block name: %s\n", block_name_buffer);
-                    continue;
-                }
-            }
-
-            run_block_command(block_index, button);
-            update_status_buffer();
+            if (read_from_fifo(fifo_fd, fifo_buffer, &oldset) <= 0) break;
+            handle_commands_from_fifo(fifo_buffer, block_name_buffer);
         }
 
         fprintf(stderr, INFO_LOG_PREFIX "closing FIFO...\n");
@@ -583,13 +557,50 @@ void run() {
     }
 }
 
-void run_periodic_updates() {
+void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
+    char *next_command = fifo_buffer;
+    int bytes_scanned, items_scanned;
+    unsigned button;
+
+    while (*next_command) {
+        items_scanned = sscanf(next_command, "%s %u\n%n", block_name_buffer, &button, &bytes_scanned);
+        if (items_scanned < 1) {
+            perror(WARN_LOG_PREFIX "FIFO command parsing failed");
+            break;
+        } else if (items_scanned == 1) {
+            fprintf(stderr, DEBUG_LOG_PREFIX "no button received from FIFO, assuming 0\n");
+            button = 0;
+        }
+        next_command = next_command + bytes_scanned;
+        fprintf(stderr, DEBUG_LOG_PREFIX "FIFO command: '%s %u'\n", block_name_buffer, button);
+
+        int block_index = 0;
+        if (is_number(block_name_buffer, FIFO_BUFFER_LEN)) {
+            /* used for direct clicks on bar */
+            block_index = atoi(block_name_buffer);
+            /* input block starts with 1, not 0, so we decrease it */
+            block_index--;
+        } else {
+            /* used for updates coming from pipe */
+            block_index = get_block_index(block_name_buffer);
+            if (block_index == -1) {
+                fprintf(stderr, ERROR_LOG_PREFIX "invalid block name: %s\n", block_name_buffer);
+                break;
+            }
+        }
+
+        run_block_command(block_index, button);
+        update_status_buffer();
+    }
+}
+
+void start_periodic_updates() {
     if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
         die(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
     }
 }
 
-void run_services() {
+void start_services() {
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         if (pipe(services_pipes[i]) < 0) {
             fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
