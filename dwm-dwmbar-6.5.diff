@@ -1,0 +1,119 @@
+diff --git a/config.def.h b/config.def.h
+index 9efa774..9cfddb3 100644
+--- a/config.def.h
++++ b/config.def.h
+@@ -104,7 +104,16 @@ static const Button buttons[] = {
+ 	{ ClkLtSymbol,          0,              Button1,        setlayout,      {0} },
+ 	{ ClkLtSymbol,          0,              Button3,        setlayout,      {.v = &layouts[2]} },
+ 	{ ClkWinTitle,          0,              Button2,        zoom,           {0} },
+-	{ ClkStatusText,        0,              Button2,        spawn,          {.v = termcmd } },
++	{ ClkStatusText,        0,              Button1,        barclick,       {.i = 1 } },
++	{ ClkStatusText,        0,              Button2,        barclick,       {.i = 2 } },
++	{ ClkStatusText,        0,              Button3,        barclick,       {.i = 3 } },
++	{ ClkStatusText,        0,              Button4,        barclick,       {.i = 4 } },
++	{ ClkStatusText,        0,              Button5,        barclick,       {.i = 5 } },
++	{ ClkStatusText,        ShiftMask,      Button1,        barclick,       {.i = 6 } },
++	{ ClkStatusText,        ShiftMask,      Button2,        barclick,       {.i = 7 } },
++	{ ClkStatusText,        ShiftMask,      Button3,        barclick,       {.i = 8 } },
++	{ ClkStatusText,        ShiftMask,      Button4,        barclick,       {.i = 9 } },
++	{ ClkStatusText,        ShiftMask,      Button5,        barclick,       {.i = 10} },
+ 	{ ClkClientWin,         MODKEY,         Button1,        movemouse,      {0} },
+ 	{ ClkClientWin,         MODKEY,         Button2,        togglefloating, {0} },
+ 	{ ClkClientWin,         MODKEY,         Button3,        resizemouse,    {0} },
+@@ -114,3 +123,5 @@ static const Button buttons[] = {
+ 	{ ClkTagBar,            MODKEY,         Button3,        toggletag,      {0} },
+ };
+ 
++/* bar settings */
++static const char barfifo[] = "/tmp/dwmbar.fifo";
+diff --git a/dwm.c b/dwm.c
+index 1443802..1c438ef 100644
+--- a/dwm.c
++++ b/dwm.c
+@@ -267,6 +267,14 @@ static Drw *drw;
+ static Monitor *mons, *selmon;
+ static Window root, wmcheckwin;
+ 
++/* bar */
++#include <sys/stat.h>
++#include <fcntl.h>
++static void barclick(const Arg *arg);
++static void copyvalidchars(char *text, char *rawtext);
++static int barblock = -1;
++static char rawstext[256];
++
+ /* configuration, allows nested code to access above variables */
+ #include "config.h"
+ 
+@@ -440,9 +448,23 @@ buttonpress(XEvent *e)
+ 			arg.ui = 1 << i;
+ 		} else if (ev->x < x + TEXTW(selmon->ltsymbol))
+ 			click = ClkLtSymbol;
+-		else if (ev->x > selmon->ww - (int)TEXTW(stext))
++		else if (ev->x > (x = selmon->ww - (int)TEXTW(stext) + lrpad / 2 - 2)) {
+ 			click = ClkStatusText;
+-		else
++			char *text = rawstext;
++			i = 0;
++			barblock = 1;
++			while (text[i]) {
++				if ((unsigned char)text[i++] != '\n')
++					continue;
++				text[i] = '\0';
++				x += TEXTW(text) - lrpad - lrpad / 2 + 2;
++				text[i] = '\n';
++				text += i+1;
++				i = 0;
++				if (ev->x <= x) break;
++				barblock++;
++			}
++		} else
+ 			click = ClkWinTitle;
+ 	} else if ((c = wintoclient(ev->window))) {
+ 		focus(c);
+@@ -456,6 +478,33 @@ buttonpress(XEvent *e)
+ 			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
+ }
+ 
++void
++barclick(const Arg *arg)
++{
++	static char cmdbuf[32];
++	int fd = open(barfifo, O_WRONLY | O_NONBLOCK);
++	if (fd != -1 && barblock != -1) {
++		sprintf(cmdbuf, "%d %d\n", barblock, arg->i);
++		write(fd, cmdbuf, strlen(cmdbuf)+1);
++		close(fd);
++		barblock = -1;
++		memset(cmdbuf, 0, strlen(cmdbuf));
++	}
++}
++
++void
++copyvalidchars(char *text, char *rawtext)
++{
++	int i = -1, j = 0;
++
++	while(rawtext[++i]) {
++		if ((unsigned char)rawtext[i] != '\n') {
++			text[j++] = rawtext[i];
++		}
++	}
++	text[j] = '\0';
++}
++
+ void
+ checkotherwm(void)
+ {
+@@ -2004,8 +2053,10 @@ updatesizehints(Client *c)
+ void
+ updatestatus(void)
+ {
+-	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
++	if (!gettextprop(root, XA_WM_NAME, rawstext, sizeof(rawstext)))
+ 		strcpy(stext, "dwm-"VERSION);
++	else
++		copyvalidchars(stext, rawstext);
+ 	drawbar(selmon);
+ }
+ 
