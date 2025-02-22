@@ -1,31 +1,85 @@
 #!/bin/bash
 
-format="🎹 <song> <stat>"
-name_length=30
+handle_block_button() {
+    case "$BLOCK_BUTTON" in
+        1) playerctl play-pause ;;
+        2) playerctl -a pause ;;
+        3) setsid supersonic-desktop & ;;
+        4) playerctl previous ;;
+        5) playerctl next ;;
+        6) parse_metadata ; send_notification ;;
+        9) playerctld shift ;;
+        10) playerctld unshift ;;
+    esac >/dev/null 2>&1
+}
 
-case $BLOCK_BUTTON in
-    1) playerctl play-pause ;;
-    2) playerctl -a pause ;;
-    3) playerctld shift ;;
-    4) playerctl previous ;;
-    5) playerctl next ;;
-    6) setsid "$TERMINAL" -e ncmpcpp & ;;
-esac >/dev/null 2>&1
+handle_status() {
+    case "$status" in
+        playing)
+            status_icon='⏸'
+            message="$(get_current_song)"
+            ;;
+        paused)
+            status_icon='▶'
+            message="$(get_current_song)"
+            ;;
+        stopped|no\ player*)
+            status_icon='⏹'
+            message="$status"
+            ;;
+        *)
+            status_icon='❓'
+            message="$status"
+            ;;
+    esac
+    echo "🎵 $message $status_icon"
+}
 
-status=$(playerctl status 2>&1 | tr '[:upper:]' '[:lower:]')
-case "$status" in
-    stopped) echo "$format" | sed -n "s/<song>/Player stopped/g ; s/<stat>/⏹/gp" && exit ;;
-    no*)     echo "$format" | sed -n "s/<song>/No players found/g ; s/<stat>/⏹/gp" && exit ;;
-    playing) stat='⏸' ;;
-    paused)  stat='▶' ;;
-    *)       stat='❓' ;;
-esac
+parse_metadata() {
+    [ -n "$status" ] && return
+    status="$(playerctl status 2>&1 | tr '[:upper:]' '[:lower:]')"
+    IFS='' read -r artist title duration <<< \
+        "$(playerctl metadata -f "{{ artist }}{{ title }}{{ duration(mpris:length) }}")"
+}
 
-song=$(playerctl metadata --format "{{ artist }} - {{ title }}")
+get_current_song() {
+    local song
+    if [ -n "$title" ]; then
+        local title_length_max=40
+        [ "${#title}" -gt $title_length_max ] &&\
+            title="${title:0:$((title_length_max - 3))}..."
 
-[[ "$song" == " - "* ]] && song="${song:3}"
+        if [ -n "$artist" ]; then
+            song="$artist — $title"
+        else
+            song="$title"
+        fi
+    fi
+    if [ -n "$duration" ]; then
+        song="$song [$duration]"
+    fi
+    echo "$song"
+}
 
-[ "${#song}" -gt $name_length ] && song="${song:0:$((name_length - 3))}..."
+send_notification() {
+    local message
+    if [ "$status" = "playing" ] || [ "$status" = "paused" ]; then
+        if [ -n "$artist" ]; then
+            message="$artist\n"
+        fi
+        message="$message<i>$title</i>"
+        if [ -n "$duration" ]; then
+            position="$(playerctl metadata -f "{{ duration(position) }}")/$duration"
+            message="$message\n[$position]"
+        fi
+    else
+        message="stopped"
+    fi
+    notify-send -r 10000 "🎵 Playerctl" "$message"
+}
 
-song="$(echo "$song" | sed 's/&/\\\\&/g ; s/"/\\"/g')"
-echo "$format" | awk "{ gsub(\"<song>\",\"${song}\",\$0); gsub(\"<stat>\",\"${stat}\",\$0); printf \$0 }"
+## main
+declare artist title duration status
+handle_block_button
+parse_metadata
+handle_status

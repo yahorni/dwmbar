@@ -1,43 +1,81 @@
 #!/bin/bash
 
-format="🎹 <song> <stat>"
-name_length=60
+handle_block_button() {
+    case "$BLOCK_BUTTON" in
+        1) mpc toggle ;;
+        2) mpc stop ;;
+        3) setsid "$TERMINAL" -e ncmpcpp & ;;
+        4) mpc prev ;;
+        5) mpc next ;;
+        6) parse_metadata ; send_notification ;;
+    esac >/dev/null 2>&1
+}
 
-case $BLOCK_BUTTON in
-    1) mpc toggle >/dev/null 2>&1 ;;
-    3) setsid "$TERMINAL" -e ncmpcpp >/dev/null 2>&1 & ;;
-    4) mpc prev >/dev/null 2>&1 ;;
-    5) mpc next >/dev/null 2>&1 ;;
-esac
-
-if [ $(mpc status | wc -l) -lt 3 ]; then
-    echo "$format" | sed -n "s/<song>/MPD stopped/g ; s/<stat>/⏹/gp" && exit
-else
-    stat="$(mpc status | sed -n '2s/\[\(.*\)\].*/\1/p')"
-    case $stat in
-        playing) stat='⏸' ;;
-        paused) stat='▶' ;;
-        *) stat='❓' ;;
+handle_status() {
+    case "$status" in
+        playing)
+            status_icon='⏸'
+            message="$(get_current_song)"
+            ;;
+        paused)
+            status_icon='▶'
+            message="$(get_current_song)"
+            ;;
+        stopped)
+            status_icon='⏹'
+            message="$status"
+            ;;
+        *)
+            status_icon='❓'
+            message="$status"
+            ;;
     esac
-fi
+    echo "🎵 $message $status_icon"
+}
 
-artist="$(mpc status -f "%artist%" | cut -d $'\n' -f1)"
-title="$(mpc status -f "%title%" | cut -d $'\n' -f1)"
+parse_metadata() {
+    [ -n "$status" ] && return
+    status="$(mpc status '%state%' | head -n1)"
+    IFS='' read -r artist title duration <<< \
+        "$(mpc status -f "%artist%%title%%time%" | head -n1)"
+}
 
-if [ -n "$title" ]; then
-    if [ -n "$artist" ]; then
-        song="$artist — $title"
+get_current_song() {
+    if [ -n "$title" ]; then
+        title_length_max=40
+        [ "${#title}" -gt $title_length_max ] &&\
+            title="${title:0:$((title_length_max - 3))}..."
+
+        if [ -n "$artist" ]; then
+            echo "$artist — $title [$duration]"
+        else
+            echo "$title [$duration]"
+        fi
     else
-        song="$title"
+        echo "$(basename "$(mpc status -f "%file%" | head -n1)") [$duration]"
     fi
-else
-    file="$(mpc status -f "%file%" | cut -d $'\n' -f1)"
-    file="${file##*/}"
-    song="${file%.*}"
-fi
+}
 
-[ "${#song}" -gt $name_length ] && song="${song:0:$((name_length - 3))}..."
+send_notification() {
+    local message
+    if [ "$status" = "playing" ] || [ "$status" = "paused" ]; then
+        position="$(mpc status '%currenttime%')/$duration"
 
-# echo "$format" | sed -n "s%<song>%${song//&/\\&}%g ; s/<stat>/${stat//&\\&}/gp" && exit
-song="$(echo "$song" | sed 's/&/\\\\&/g ; s/"/\\"/g')"
-echo "$format" | awk "{ gsub(\"<song>\",\"${song}\",\$0); gsub(\"<stat>\",\"${stat}\",\$0); printf \$0 }"
+        message="${artist:-\[Unknown Artist\]}\n"
+        if [ -n "$title" ]; then
+            message="$message<i>$title</i>\n"
+        else
+            message="$message<i>$(basename "$(mpc status -f "%file%" | head -n1)")</i>\n"
+        fi
+        message="${message}[$position]"
+    else
+        message="stopped"
+    fi
+    notify-send -r 10000 "🎵 MPD" "$message"
+}
+
+## main
+declare artist title duration status
+handle_block_button
+parse_metadata
+handle_status
