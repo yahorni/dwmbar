@@ -36,11 +36,12 @@ typedef struct {
 
 #include "config.h"
 
+
 /* definitions */
 
-// TODO: make configurable
-#define BAR_LEN 510
-#define BLOCK_OUTPUT_LEN 70
+#define BAR_LEN 1000
+/* compile time check for block length */
+struct BlockLenCheck { char block_longer_than_bar[BLOCK_OUTPUT_LEN > BAR_LEN ? -1 : 1]; };
 
 #define BLOCKS_AMOUNT (sizeof(blocks) / sizeof(blocks[0]))
 #define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
@@ -149,13 +150,14 @@ void update_status_buffer() {
 
     /* position where to start writing */
     int k = 0;
-    int delim_width = with_spaces ? 4 : 2;
+    int delimiter_width = with_spaces ? 4 : 2;
     /* leave space for last \0 */
     for (size_t i = 0; i < BLOCKS_AMOUNT && k < BAR_LEN - 1; i++) {
         /* check i > 0 to skip first block */
-        if (i && k + delim_width < BAR_LEN - 1) {
+        if (i && k + delimiter_width < BAR_LEN - 1) {
             if (with_spaces) new_status[k++] = ' ';
-            new_status[k++] = delimiter;
+            if (delimiter)
+                new_status[k++] = delimiter;
             new_status[k++] = '\n';
             if (with_spaces) new_status[k++] = ' ';
         }
