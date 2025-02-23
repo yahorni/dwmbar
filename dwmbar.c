@@ -144,6 +144,7 @@ static int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset);
 static void setup();
 static void run();
 static void cleanup();
+static int parse_command(char *in, char *out, int *button);
 static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
 static void start_updater();
 static void cleanup_updater();
@@ -595,27 +596,63 @@ void run() {
     }
 }
 
+int parse_command(char *in, char *out, int *button) {
+    /* indeces for in/out */
+    int i = 0, o = 0;
+
+    /* skipping any leading spaces */
+    while (in[i] == ' ')
+        i++;
+
+    /* copy command til encounter '\0', newline or space */
+    while (in[i] != '\0' && in[i] != '\n' && in[i] != ' ') {
+        out[o] = in[i];
+        i++;
+        o++;
+    }
+    /* set ending for command */
+    out[o] = '\0';
+
+    /* set button to zero by default */
+    *button = 0;
+    /* if we read til space, it means next will be either button, trash, newline or \0 */
+    if (in[i] == ' ') {
+        i++;
+        *button = strtol(in + i, NULL, 10);
+    }
+
+    /* shifting til newline or \0 if it's still not found */
+    while (in[i] != '\0' && in[i] != '\n')
+        i++;
+
+    /* if we found newline - shift to the next symbol, it's either next command or \0 */
+    if (in[i] == '\n') i++;
+
+    /* return amount of bytes til new command */
+    return i;
+}
+
 void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
     char *next_command = fifo_buffer;
-    int bytes_scanned, items_scanned;
-    unsigned button;
+    int button = 0;
 
-    while (*next_command) {
-        items_scanned = sscanf(next_command, "%s %u\n%n", block_name_buffer, &button, &bytes_scanned);
-        if (items_scanned < 1) {
-            perror(WARN_LOG_PREFIX "FIFO command parsing failed");
-            break;
-        } else if (items_scanned == 1) {
-            fprintf(stderr, DEBUG_LOG_PREFIX "no button received from FIFO, assuming 0\n");
-            button = 0;
+    while (*next_command != '\0') {
+        next_command += parse_command(next_command, block_name_buffer, &button);
+        if (strlen(block_name_buffer)) {
+            fprintf(stderr, DEBUG_LOG_PREFIX "FIFO command: '%s %d'\n", block_name_buffer, button);
+        } else {
+            fprintf(stderr, WARN_LOG_PREFIX "got empty command from FIFO\n");
+            continue;
         }
-        next_command = next_command + bytes_scanned;
-        fprintf(stderr, DEBUG_LOG_PREFIX "FIFO command: '%s %u'\n", block_name_buffer, button);
 
-        int block_index = 0;
+        int block_index;
         if (is_number(block_name_buffer, FIFO_BUFFER_LEN)) {
             /* used for direct clicks on bar */
             block_index = atoi(block_name_buffer);
+            if (block_index < 1 || block_index > (int)BLOCKS_AMOUNT) {
+                fprintf(stderr, ERROR_LOG_PREFIX "invalid block index: %d\n", block_index);
+                return;
+            }
             /* input block starts with 1, not 0, so we decrease it */
             block_index--;
         } else {
@@ -623,7 +660,7 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
             block_index = get_block_index(block_name_buffer);
             if (block_index == -1) {
                 fprintf(stderr, ERROR_LOG_PREFIX "invalid block name: %s\n", block_name_buffer);
-                break;
+                return;
             }
         }
 
