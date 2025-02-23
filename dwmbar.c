@@ -14,6 +14,7 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <wordexp.h>
 
@@ -105,6 +106,7 @@ static ServiceThreadArgs services_args[SERVICES_AMOUNT];
 /* execution flow */
 volatile sig_atomic_t is_running = 1;
 static int is_restart = 0;
+static sigset_t default_sigset;
 
 /* function declarations */
 
@@ -130,7 +132,7 @@ static void stop_service(ServiceContext *ctx);
 /* signals */
 static void signal_handler(int signum);
 static void restart_handler(int signum);
-sigset_t setup_signals();
+static void setup_signals();
 
 /* fifo */
 static int create_fifo();
@@ -139,11 +141,14 @@ static int remove_fifo_if_exists();
 static int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset);
 
 /* execution flow */
+static void setup();
 static void run();
-static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
-static void start_periodic_updates();
-static void start_services();
 static void cleanup();
+static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
+static void start_updater();
+static void cleanup_updater();
+static void start_services();
+static void cleanup_services();
 
 /* function implementations */
 
@@ -307,6 +312,8 @@ void run_oneshot_service(ServiceContext *ctx) {
             return;
         }
 
+        fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "pid: %d\n", ctx->command, ctx->pid);
+
         if (read_from_service(ctx)) {
             run_block_command(ctx->block_index, 0);
             update_status_buffer();
@@ -322,6 +329,8 @@ void run_continuous_service(ServiceContext *ctx) {
         perror(NULL);
         return;
     }
+
+    fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "pid: %d\n", ctx->command, ctx->pid);
 
     while (is_running) {
         if (read_from_service(ctx)) {
@@ -380,22 +389,28 @@ bool read_from_service(ServiceContext *ctx) {
 
 void stop_service(ServiceContext *ctx) {
     /* close process output pipe */
+    fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "closing output pipe\n", ctx->command);
     if (close(ctx->process_fd)) {
         fprintf(stderr, WARN_LOG_PREFIX SERVICE_PREFIX "error while closing fd pipe: ", ctx->command);
         perror(NULL);
     }
 
     /* finish process */
-    if (kill(ctx->pid, SIGTERM) < 0) {
+    fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "sent signal to terminate\n", ctx->command);
+    if (kill(ctx->pid, SIGTERM) != 0) {
         fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to terminate with SIGTERM", ctx->command);
         perror(NULL);
     }
 
-    /* ensure process finished */
-    if (kill(ctx->pid, 0) == ESRCH) {
-        fprintf(stderr, INFO_LOG_PREFIX SERVICE_PREFIX "already terminated\n", ctx->command);
-        return;
+    /* wait for process */
+    fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "waiting for process\n", ctx->command);
+    int wait_status;
+    if (waitpid(ctx->pid, &wait_status, 0) < 0) {
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to wait for pid %d: ", ctx->command, ctx->pid);
+        perror(NULL);
     }
+
+    fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "process finished\n", ctx->command);
 }
 
 void signal_handler(int signum) {
@@ -410,37 +425,37 @@ void restart_handler(int signum) {
     signal_handler(signum);
 }
 
-sigset_t setup_signals() {
+void setup_signals() {
     /* install signal handlers */
-    struct sigaction sa;
-    sa.sa_handler = signal_handler;
-    sa.sa_flags = 0;
-    sigemptyset(&sa.sa_mask);
+    struct sigaction sa_exit;
+    sa_exit.sa_handler = signal_handler;
+    sa_exit.sa_flags = 0;
+    sigemptyset(&sa_exit.sa_mask);
     /* dmw is finishing */
-    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGHUP, &sa_exit, NULL);
     /* kill -9 */
-    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGINT, &sa_exit, NULL);
     /* kill */
-    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGTERM, &sa_exit, NULL);
 
     /* install SIGUSR1 for restarting */
-    struct sigaction rsa;
-    rsa.sa_handler = restart_handler;
-    rsa.sa_flags = 0;
-    sigemptyset(&rsa.sa_mask);
+    struct sigaction sa_restart;
+    sa_restart.sa_handler = restart_handler;
+    sa_restart.sa_flags = 0;
+    sigemptyset(&sa_restart.sa_mask);
     /* kill -USR1 */
-    sigaction(SIGUSR1, &rsa, NULL);
+    sigaction(SIGUSR1, &sa_restart, NULL);
 
     /* block signals */
-    sigset_t sigset, oldset;
+    sigset_t sigset;
     sigemptyset(&sigset);
-    sigaddset(&sigset, SIGINT);
     sigaddset(&sigset, SIGHUP);
+    sigaddset(&sigset, SIGINT);
     sigaddset(&sigset, SIGTERM);
     sigaddset(&sigset, SIGUSR1);
-    sigprocmask(SIG_BLOCK, &sigset, &oldset);
 
-    return oldset;
+    /* sigprocmask for multithreaded app */
+    pthread_sigmask(SIG_BLOCK, &sigset, &default_sigset);
 }
 
 int create_fifo() {
@@ -519,24 +534,40 @@ int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset) {
     return nread;
 }
 
-void run() {
-    fprintf(stderr, INFO_LOG_PREFIX "starting...\n");
+void setup() {
     fprintf(stderr, INFO_LOG_PREFIX "FIFO file: %s\n", fifo_path);
 
     /* expand full blocks path in case it has '~' or any env variables */
     expand_blocks_path();
 
-    /* setup signals, store old set for pselect */
-    sigset_t oldset = setup_signals();
-
-    char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
-    char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
-
     remove_fifo_if_exists();
     if (!create_fifo()) return;
 
-    start_periodic_updates();
+    start_updater();
     start_services();
+
+    /* setup signals after starting threads to not mess with their sigmask*/
+    setup_signals();
+}
+
+void cleanup() {
+    fprintf(stderr, INFO_LOG_PREFIX "cleaning up...\n");
+
+    /* sigprocmask for multithreaded app */
+    pthread_sigmask(SIG_SETMASK, &default_sigset, 0);
+
+    cleanup_services();
+    cleanup_updater();
+
+    remove_fifo_if_exists();
+
+    pthread_mutex_destroy(&run_command_lock);
+    pthread_mutex_destroy(&update_status_lock);
+}
+
+void run() {
+    char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
+    char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
 
     while (is_running) {
         fprintf(stderr, INFO_LOG_PREFIX "opening FIFO...\n");
@@ -552,7 +583,7 @@ void run() {
             reset_buffer(fifo_buffer, FIFO_BUFFER_LEN);
             reset_buffer(block_name_buffer, FIFO_BUFFER_LEN);
 
-            if (read_from_fifo(fifo_fd, fifo_buffer, &oldset) <= 0) break;
+            if (read_from_fifo(fifo_fd, fifo_buffer, &default_sigset) <= 0) break;
             handle_commands_from_fifo(fifo_buffer, block_name_buffer);
         }
 
@@ -601,16 +632,19 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
     }
 }
 
-void start_periodic_updates() {
+void start_updater() {
     if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
         die(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
     }
 }
 
+void cleanup_updater() { pthread_join(updater_thread_id, NULL); }
+
 void start_services() {
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         if (pipe(services_pipes[i]) < 0) {
             fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
+            perror(NULL);
             return;
         }
 
@@ -623,13 +657,7 @@ void start_services() {
     }
 }
 
-void cleanup() {
-    fprintf(stderr, INFO_LOG_PREFIX "cleaning up...\n");
-
-    pthread_mutex_destroy(&run_command_lock);
-    pthread_mutex_destroy(&update_status_lock);
-    pthread_join(updater_thread_id, NULL);
-
+void cleanup_services() {
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         const char *command = services[i].command;
         write(services_pipes[i][1], "", 1);
@@ -640,8 +668,6 @@ void cleanup() {
         close(services_pipes[i][0]);
         close(services_pipes[i][1]);
     }
-
-    remove_fifo_if_exists();
 }
 
 int main(int argc, char **argv) {
@@ -650,14 +676,11 @@ int main(int argc, char **argv) {
     else if (argc != 1)
         die("usage: dwm [-v]");
 
+    setup();
     run();
     cleanup();
 
-    if (is_restart) {
-        sigset_t sigs;
-        sigprocmask(SIG_SETMASK, &sigs, 0);
-        execvp(argv[0], argv);
-    }
+    if (is_restart) execvp(argv[0], argv);
 
     return EXIT_SUCCESS;
 }
