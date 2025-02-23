@@ -103,10 +103,12 @@ static pthread_t services_thread_ids[SERVICES_AMOUNT];
 static int services_pipes[SERVICES_AMOUNT][2];
 static ServiceThreadArgs services_args[SERVICES_AMOUNT];
 
+/* signals */
+static sigset_t default_sigset;
+static int is_restart = 0;
+
 /* execution flow */
 volatile sig_atomic_t is_running = 1;
-static int is_restart = 0;
-static sigset_t default_sigset;
 
 /* function declarations */
 
@@ -121,6 +123,8 @@ static int get_block_index(const char *name);
 
 /* periodic updater */
 static void *periodic_updater(void *vargp);
+static void start_updater();
+static void cleanup_updater();
 
 /* services */
 static void *run_service(void *vargp);
@@ -128,6 +132,8 @@ static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
 static bool read_from_service(ServiceContext *ctx);
 static void stop_service(ServiceContext *ctx);
+static void start_services();
+static void cleanup_services();
 
 /* signals */
 static void signal_handler(int signum);
@@ -140,18 +146,18 @@ static int open_fifo();
 static int remove_fifo_if_exists();
 static int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset);
 
+/* commands */
+static int parse_command(char *in, char *out, int *button);
+static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
+
 /* execution flow */
 static void setup();
 static void run();
 static void cleanup();
-static int parse_command(char *in, char *out, int *button);
-static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
-static void start_updater();
-static void cleanup_updater();
-static void start_services();
-static void cleanup_services();
 
 /* function implementations */
+
+/* status bar */
 
 void update_status_buffer() {
     pthread_mutex_lock(&update_status_lock);
@@ -205,6 +211,8 @@ void set_x11_status(char *status) {
     XStoreName(dpy, root_window, status);
     XCloseDisplay(dpy);
 }
+
+/* blocks */
 
 /* Expands env variables and '~' in blocks path */
 void expand_blocks_path() {
@@ -262,6 +270,8 @@ int get_block_index(const char *name) {
     return -1;
 }
 
+/* periodic updater */
+
 void *periodic_updater(void *vargp) {
     /* suppress warn */
     (void)vargp;
@@ -283,6 +293,16 @@ void *periodic_updater(void *vargp) {
 
     return NULL;
 }
+
+void start_updater() {
+    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
+        die(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
+    }
+}
+
+void cleanup_updater() { pthread_join(updater_thread_id, NULL); }
+
+/* services */
 
 void *run_service(void *vargp) {
     ServiceThreadArgs *args = vargp;
@@ -414,6 +434,38 @@ void stop_service(ServiceContext *ctx) {
     fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "process finished\n", ctx->command);
 }
 
+void start_services() {
+    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
+        if (pipe(services_pipes[i]) < 0) {
+            fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
+            perror(NULL);
+            return;
+        }
+
+        services_args[i].service = (Service *)&services[i];
+        services_args[i].pipe_fd = services_pipes[i][0];
+
+        if (pthread_create(&services_thread_ids[i], NULL, &run_service, (void *)&services_args[i])) {
+            die(ERROR_LOG_PREFIX "pthread_create() failed for service '%s'", services[i].command);
+        }
+    }
+}
+
+void cleanup_services() {
+    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
+        const char *command = services[i].command;
+        write(services_pipes[i][1], "", 1);
+        fprintf(stderr, DEBUG_LOG_PREFIX "waiting for service '%s'\n", command);
+        pthread_join(services_thread_ids[i], NULL);
+        fprintf(stderr, DEBUG_LOG_PREFIX "finished service '%s'\n", command);
+
+        close(services_pipes[i][0]);
+        close(services_pipes[i][1]);
+    }
+}
+
+/* signals */
+
 void signal_handler(int signum) {
     /* TODO: probably need to get rid of fprintf */
     /* https://stackoverflow.com/questions/16891019/how-to-avoid-using-printf-in-a-signal-handler */
@@ -458,6 +510,8 @@ void setup_signals() {
     /* sigprocmask for multithreaded app */
     pthread_sigmask(SIG_BLOCK, &sigset, &default_sigset);
 }
+
+/* fifo */
 
 int create_fifo() {
     /* create fifo */
@@ -535,66 +589,7 @@ int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset) {
     return nread;
 }
 
-void setup() {
-    fprintf(stderr, INFO_LOG_PREFIX "FIFO file: %s\n", fifo_path);
-
-    /* expand full blocks path in case it has '~' or any env variables */
-    expand_blocks_path();
-
-    remove_fifo_if_exists();
-    if (!create_fifo()) return;
-
-    start_updater();
-    start_services();
-
-    /* setup signals after starting threads to not mess with their sigmask*/
-    setup_signals();
-}
-
-void cleanup() {
-    fprintf(stderr, INFO_LOG_PREFIX "cleaning up...\n");
-
-    /* sigprocmask for multithreaded app */
-    pthread_sigmask(SIG_SETMASK, &default_sigset, 0);
-
-    cleanup_services();
-    cleanup_updater();
-
-    remove_fifo_if_exists();
-
-    pthread_mutex_destroy(&run_command_lock);
-    pthread_mutex_destroy(&update_status_lock);
-}
-
-void run() {
-    char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
-    char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
-
-    while (is_running) {
-        fprintf(stderr, INFO_LOG_PREFIX "opening FIFO...\n");
-
-        int fifo_fd = -1;
-        if ((fifo_fd = open_fifo()) < 0) {
-            fprintf(stderr, ERROR_LOG_PREFIX "failed to create FIFO");
-            break;
-        }
-
-        fprintf(stderr, INFO_LOG_PREFIX "reading FIFO...\n");
-        while (is_running) {
-            reset_buffer(fifo_buffer, FIFO_BUFFER_LEN);
-            reset_buffer(block_name_buffer, FIFO_BUFFER_LEN);
-
-            if (read_from_fifo(fifo_fd, fifo_buffer, &default_sigset) <= 0) break;
-            handle_commands_from_fifo(fifo_buffer, block_name_buffer);
-        }
-
-        fprintf(stderr, INFO_LOG_PREFIX "closing FIFO...\n");
-        if (close(fifo_fd) < 0) {
-            perror(ERROR_LOG_PREFIX "close() failed");
-            break;
-        }
-    }
-}
+/* commands */
 
 int parse_command(char *in, char *out, int *button) {
     /* indeces for in/out */
@@ -669,41 +664,66 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
     }
 }
 
-void start_updater() {
-    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
-        die(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
-    }
+/* execution flow */
+
+void setup() {
+    fprintf(stderr, INFO_LOG_PREFIX "FIFO file: %s\n", fifo_path);
+
+    /* expand full blocks path in case it has '~' or any env variables */
+    expand_blocks_path();
+
+    remove_fifo_if_exists();
+    if (!create_fifo()) return;
+
+    start_updater();
+    start_services();
+
+    /* setup signals after starting threads to not mess with their sigmask*/
+    setup_signals();
 }
 
-void cleanup_updater() { pthread_join(updater_thread_id, NULL); }
+void cleanup() {
+    fprintf(stderr, INFO_LOG_PREFIX "cleaning up...\n");
 
-void start_services() {
-    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
-        if (pipe(services_pipes[i]) < 0) {
-            fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
-            perror(NULL);
-            return;
-        }
+    /* sigprocmask for multithreaded app */
+    pthread_sigmask(SIG_SETMASK, &default_sigset, 0);
 
-        services_args[i].service = (Service *)&services[i];
-        services_args[i].pipe_fd = services_pipes[i][0];
+    cleanup_services();
+    cleanup_updater();
 
-        if (pthread_create(&services_thread_ids[i], NULL, &run_service, (void *)&services_args[i])) {
-            die(ERROR_LOG_PREFIX "pthread_create() failed for service '%s'", services[i].command);
-        }
-    }
+    remove_fifo_if_exists();
+
+    pthread_mutex_destroy(&run_command_lock);
+    pthread_mutex_destroy(&update_status_lock);
 }
 
-void cleanup_services() {
-    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
-        const char *command = services[i].command;
-        write(services_pipes[i][1], "", 1);
-        fprintf(stderr, DEBUG_LOG_PREFIX "waiting for service '%s'\n", command);
-        pthread_join(services_thread_ids[i], NULL);
-        fprintf(stderr, DEBUG_LOG_PREFIX "finished service '%s'\n", command);
+void run() {
+    char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
+    char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
 
-        close(services_pipes[i][0]);
-        close(services_pipes[i][1]);
+    while (is_running) {
+        fprintf(stderr, INFO_LOG_PREFIX "opening FIFO...\n");
+
+        int fifo_fd = -1;
+        if ((fifo_fd = open_fifo()) < 0) {
+            fprintf(stderr, ERROR_LOG_PREFIX "failed to create FIFO");
+            break;
+        }
+
+        fprintf(stderr, INFO_LOG_PREFIX "reading FIFO...\n");
+        while (is_running) {
+            reset_buffer(fifo_buffer, FIFO_BUFFER_LEN);
+            reset_buffer(block_name_buffer, FIFO_BUFFER_LEN);
+
+            if (read_from_fifo(fifo_fd, fifo_buffer, &default_sigset) <= 0) break;
+            handle_commands_from_fifo(fifo_buffer, block_name_buffer);
+        }
+
+        fprintf(stderr, INFO_LOG_PREFIX "closing FIFO...\n");
+        if (close(fifo_fd) < 0) {
+            perror(ERROR_LOG_PREFIX "close() failed");
+            break;
+        }
     }
 }
 
