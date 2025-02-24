@@ -60,6 +60,7 @@ struct BlockLenCheck {
 #define DEBUG_LOG_PREFIX "dwmbar(debug): "
 
 #define SERVICE_PREFIX "service '%s': "
+#define UPDATER_PREFIX "updater: "
 
 /* internal types */
 
@@ -97,6 +98,7 @@ static Window root_window;
 
 /* periodic_updater */
 static pthread_t updater_thread_id;
+static int updater_pipe[2];
 
 /* services */
 static pthread_t services_thread_ids[SERVICES_AMOUNT];
@@ -123,7 +125,7 @@ static int get_block_index(const char *name);
 
 /* periodic updater */
 static void *periodic_updater(void *vargp);
-static void start_updater();
+static bool start_updater();
 static void cleanup_updater();
 
 /* services */
@@ -132,13 +134,14 @@ static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
 static bool read_from_service(ServiceContext *ctx);
 static void stop_service(ServiceContext *ctx);
-static void start_services();
+static bool start_services();
+static void cleanup_service(int index);
 static void cleanup_services();
 
 /* signals */
 static void signal_handler(int signum);
 static void restart_handler(int signum);
-static void setup_signals();
+static bool setup_signals();
 
 /* fifo */
 static int create_fifo();
@@ -151,7 +154,7 @@ static int parse_command(char *in, char *out, int *button);
 static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
 
 /* execution flow */
-static void setup();
+static bool setup();
 static void run();
 static void cleanup();
 
@@ -287,20 +290,47 @@ void *periodic_updater(void *vargp) {
             }
         }
         update_status_buffer();
-        sleep(1);
+
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(updater_pipe[0], &read_fds);
+        struct timeval tv = {1, 0};
+
+        int retval = select(updater_pipe[0] + 1, &read_fds, NULL, NULL, &tv);
+        if (retval < 0) {
+            perror(ERROR_LOG_PREFIX UPDATER_PREFIX "select() failed");
+            return NULL;
+        } else if (retval) {
+            fprintf(stderr, INFO_LOG_PREFIX UPDATER_PREFIX "received message to stop\n");
+            return NULL;
+        }
+
         time++;
     }
 
     return NULL;
 }
 
-void start_updater() {
-    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
-        die(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
+bool start_updater() {
+    if (pipe(updater_pipe) < 0) {
+        fprintf(stderr, ERROR_LOG_PREFIX "pipe() failed for updater");
+        perror(NULL);
+        return false;
     }
+
+    if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
+        perror(INFO_LOG_PREFIX "pthread_create() failed for periodic updater");
+        return false;
+    }
+
+    return true;
 }
 
-void cleanup_updater() { pthread_join(updater_thread_id, NULL); }
+void cleanup_updater() {
+    write(updater_pipe[1], "", 1);
+    fprintf(stderr, DEBUG_LOG_PREFIX "waiting for updater\n");
+    pthread_join(updater_thread_id, NULL);
+}
 
 /* services */
 
@@ -434,21 +464,45 @@ void stop_service(ServiceContext *ctx) {
     fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "process finished\n", ctx->command);
 }
 
-void start_services() {
+bool start_services() {
+    int started = 0;
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         if (pipe(services_pipes[i]) < 0) {
             fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
             perror(NULL);
-            return;
+            return false;
         }
 
         services_args[i].service = (Service *)&services[i];
         services_args[i].pipe_fd = services_pipes[i][0];
 
         if (pthread_create(&services_thread_ids[i], NULL, &run_service, (void *)&services_args[i])) {
-            die(ERROR_LOG_PREFIX "pthread_create() failed for service '%s'", services[i].command);
+            fprintf(stderr, ERROR_LOG_PREFIX "pthread_create() failed for service '%s'", services[i].command);
         }
+
+        started++;
     }
+
+    if (started != SERVICES_AMOUNT) {
+        for (int i = 0; i < started; i++)
+            cleanup_service(i);
+        return false;
+    }
+
+    return true;
+}
+
+void cleanup_service(int index) {
+    const char *command = services[index].command;
+    write(services_pipes[index][1], "", 1);
+
+    fprintf(stderr, DEBUG_LOG_PREFIX "waiting for service '%s'\n", command);
+    pthread_join(services_thread_ids[index], NULL);
+
+    close(services_pipes[index][0]);
+    close(services_pipes[index][1]);
+
+    fprintf(stderr, DEBUG_LOG_PREFIX "finished service '%s'\n", command);
 }
 
 void cleanup_services() {
@@ -478,7 +532,7 @@ void restart_handler(int signum) {
     signal_handler(signum);
 }
 
-void setup_signals() {
+bool setup_signals() {
     /* install signal handlers */
     struct sigaction sa_exit;
     sa_exit.sa_handler = signal_handler;
@@ -508,7 +562,12 @@ void setup_signals() {
     sigaddset(&sigset, SIGUSR1);
 
     /* sigprocmask for multithreaded app */
-    pthread_sigmask(SIG_BLOCK, &sigset, &default_sigset);
+    if (pthread_sigmask(SIG_BLOCK, &sigset, &default_sigset)) {
+        perror("pthread_sigmask() failed");
+        return false;
+    }
+
+    return true;
 }
 
 /* fifo */
@@ -666,20 +725,24 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
 
 /* execution flow */
 
-void setup() {
+bool setup() {
     fprintf(stderr, INFO_LOG_PREFIX "FIFO file: %s\n", fifo_path);
 
     /* expand full blocks path in case it has '~' or any env variables */
     expand_blocks_path();
 
+    /* create fifo */
     remove_fifo_if_exists();
-    if (!create_fifo()) return;
+    if (!create_fifo()) return false;
 
-    start_updater();
-    start_services();
+    /* start threads */
+    if (!start_updater()) return false;
+    if (!start_services()) return false;
 
     /* setup signals after starting threads to not mess with their sigmask*/
-    setup_signals();
+    if (!setup_signals()) return false;
+
+    return true;
 }
 
 void cleanup() {
@@ -733,7 +796,8 @@ int main(int argc, char **argv) {
     else if (argc != 1)
         die("usage: dwm [-v]");
 
-    setup();
+    if (!setup()) die("setup failed");
+
     run();
     cleanup();
 
