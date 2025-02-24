@@ -404,7 +404,7 @@ bool read_from_service(ServiceContext *ctx) {
     FD_SET(ctx->pipe_fd, &read_fds);
 
     if (select(nfds, &read_fds, NULL, NULL, NULL) < 0) {
-        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "select() error: ", ctx->command);
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "select() failed: ", ctx->command);
         perror(NULL);
         return false;
     }
@@ -442,14 +442,14 @@ void stop_service(ServiceContext *ctx) {
     /* close process output pipe */
     fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "closing output pipe\n", ctx->command);
     if (close(ctx->process_fd)) {
-        fprintf(stderr, WARN_LOG_PREFIX SERVICE_PREFIX "error while closing fd pipe: ", ctx->command);
+        fprintf(stderr, WARN_LOG_PREFIX SERVICE_PREFIX "close() failed for output pipe: ", ctx->command);
         perror(NULL);
     }
 
     /* finish process */
     fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "sent signal to terminate\n", ctx->command);
     if (kill(ctx->pid, SIGTERM) != 0) {
-        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to terminate with SIGTERM", ctx->command);
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "kill() with SIGTERM failed", ctx->command);
         perror(NULL);
     }
 
@@ -457,7 +457,7 @@ void stop_service(ServiceContext *ctx) {
     fprintf(stderr, DEBUG_LOG_PREFIX SERVICE_PREFIX "waiting for process\n", ctx->command);
     int wait_status;
     if (waitpid(ctx->pid, &wait_status, 0) < 0) {
-        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "failed to wait for pid %d: ", ctx->command, ctx->pid);
+        fprintf(stderr, ERROR_LOG_PREFIX SERVICE_PREFIX "waitpid() failed for pid %d: ", ctx->command, ctx->pid);
         perror(NULL);
     }
 
@@ -468,7 +468,7 @@ bool start_services() {
     int started = 0;
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         if (pipe(services_pipes[i]) < 0) {
-            fprintf(stderr, ERROR_LOG_PREFIX "failed to set pipe for threads communication");
+            fprintf(stderr, ERROR_LOG_PREFIX "pipe() failed for service '%s'", services[i].command);
             perror(NULL);
             return false;
         }
@@ -626,8 +626,7 @@ int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset) {
     FD_SET(fifo_fd, &read_fds);
 
     if (pselect(fifo_fd + 1, &read_fds, NULL, NULL, NULL, sigset) < 0) {
-        fprintf(stderr, WARN_LOG_PREFIX "pselect() error: ");
-        perror(NULL);
+        perror(WARN_LOG_PREFIX "pselect() failed");
         return -1;
     }
 
