@@ -1,31 +1,10 @@
 /* See LICENSE file for copyright and license details. */
 
 #include <ctype.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "util.h"
-
-/* die() is taken from dwm's util.c */
-void die(const char *fmt, ...) {
-    va_list ap;
-
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-
-    if (fmt[0] && fmt[strlen(fmt) - 1] == ':') {
-        fputc(' ', stderr);
-        perror(NULL);
-    } else {
-        fputc('\n', stderr);
-    }
-
-    exit(1);
-}
 
 int is_number(const char *str, unsigned long buf_max_len) {
     unsigned long len = strnlen(str, buf_max_len);
@@ -35,6 +14,8 @@ int is_number(const char *str, unsigned long buf_max_len) {
 
     return 1;
 }
+
+/* buffer manipulation helpers */
 
 void reset_buffer(char *buf, size_t size) {
 #ifdef __STDC_LIB_EXT1__
