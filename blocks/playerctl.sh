@@ -3,7 +3,7 @@
 handle_block_button() {
     case "$BLOCK_BUTTON" in
         1) playerctl play-pause ;;
-        2) playerctl -a pause ;;
+        2) playerctl -a pause ; command -v playerctld && playerctld shift ;;
         3) setsid supersonic-desktop & ;;
         4) playerctl previous ;;
         5) playerctl next ;;
