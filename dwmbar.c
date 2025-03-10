@@ -246,9 +246,9 @@ void run_block_command(int block_index, int button) {
 
     FILE *command_file;
     if (button) {
-        sprintf(current_command, "BLOCK_BUTTON=%d %s/%s", button, blocks_path, block->command);
+        snprintf(current_command, BLOCK_CMD_LEN, "BLOCK_BUTTON=%d %s/%s", button, blocks_path, block->command);
     } else {
-        sprintf(current_command, "%s/%s", blocks_path, block->command);
+        snprintf(current_command, BLOCK_CMD_LEN, "%s/%s", blocks_path, block->command);
     }
 
     log_debug("executing command: '%s'", current_command);
@@ -266,7 +266,12 @@ void run_block_command(int block_index, int button) {
         log_error("fgets() failed to read output of command '%s':", current_command);
     }
 
-    pclose(command_file);
+    int status = pclose(command_file);
+    if (status < 0) {
+        log_error("pclose() failed for command '%s':", current_command);
+    } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        log_error("command '%s' exited with status %d", current_command, WEXITSTATUS(status));
+    }
 
     pthread_mutex_unlock(&run_command_lock);
 }
@@ -286,7 +291,7 @@ void *periodic_updater(void *vargp) {
     (void)vargp;
 
     const Block *current_block;
-    unsigned int time = 0;
+    unsigned long time = 0;
 
     while (is_running) {
         for (size_t i = 0; i < BLOCKS_AMOUNT; i++) {
@@ -431,7 +436,7 @@ bool read_from_service(ServiceContext *ctx) {
         }
 
         if (nread > 0) {
-            ctx->read_buffer[nread - 1] = '\0';
+            ctx->read_buffer[nread] = '\0';
             log_debug(SERVICE_LOG "message: %s", ctx->command, ctx->read_buffer);
         } else {
             log_debug(SERVICE_LOG "read() received EOF", ctx->command);
@@ -696,8 +701,12 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
         int block_index;
         if (is_number(block_name_buffer, FIFO_BUFFER_LEN)) {
             /* used for direct clicks on bar */
-            block_index = atoi(block_name_buffer);
-            if (block_index < 1 || block_index > (int)BLOCKS_AMOUNT) {
+            char *endptr;
+            block_index = strtol(block_name_buffer, &endptr, 10);
+            if (endptr == block_name_buffer ||  // No digits parsed
+                *endptr != '\0' ||              // Extra characters after number
+                block_index < 1 ||
+                block_index > (int)BLOCKS_AMOUNT) {
                 log_error("invalid block index: %d", block_index);
                 return;
             }
@@ -791,6 +800,7 @@ void run() {
 /* logging */
 void log_log(const char *level, FILE *f, const char *fmt, ...) {
     /* not thread safe logging */
+    /* TODO: flockfile/funlockfile? */
     fprintf(f, "dwmbar(%s): ", level);
     va_list ap;
     va_start(ap, fmt);
