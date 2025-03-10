@@ -1,9 +1,12 @@
 /* See LICENSE file for copyright and license details. */
 
+#include <linux/limits.h>
+#include <wordexp.h>
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <X11/Xlib.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -16,7 +19,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <wordexp.h>
 
 #include "util.h"
 
@@ -39,7 +41,7 @@ typedef struct {
 
 /* definitions */
 
-#define BAR_LEN 1000
+#define BAR_LEN 700
 /* compile time check for block length */
 struct BlockLenCheck {
     char block_longer_than_bar[BLOCK_OUTPUT_LEN > BAR_LEN ? -1 : 1];
@@ -49,10 +51,10 @@ struct BlockLenCheck {
 #define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
 #define EMPTY_BLOCK_SIZE (sizeof(empty_block) / sizeof(empty_block[0]))
 
-#define BLOCKS_PATH_LEN 250
-#define BLOCK_CMD_LEN 510
-#define FIFO_BUFFER_LEN 250
-#define SERVICE_READ_BUFFER_LEN 510
+#define BLOCK_CMD_LEN 255
+#define FULL_CMD_LEN (PATH_MAX + BLOCK_CMD_LEN)
+#define FIFO_BUFFER_LEN 255
+#define SERVICE_READ_BUFFER_LEN 511
 
 /* logging */
 #define SERVICE_LOG "service '%s': "
@@ -82,9 +84,9 @@ static char new_status[BAR_LEN + 1];
 static pthread_mutex_t update_status_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* blocks */
-static char current_command[BLOCK_CMD_LEN + 1];
-static char blocks_path[BLOCKS_PATH_LEN + 1];
+static char blocks_path[PATH_MAX];
 static char blocks_cache[BLOCKS_AMOUNT][BLOCK_OUTPUT_LEN + 1];
+static char current_command[FULL_CMD_LEN + 1];
 static pthread_mutex_t run_command_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* X11 */
@@ -115,7 +117,7 @@ static void update_status_buffer();
 static void set_x11_status(char *status);
 
 /* blocks */
-static void expand_blocks_path();
+static bool expand_blocks_path();
 static void run_block_command(int block_index, int button);
 static int get_block_index(const char *name);
 
@@ -224,15 +226,45 @@ void set_x11_status(char *status) {
 
 /* blocks */
 
-/* Expands env variables and '~' in blocks path */
-void expand_blocks_path() {
-    wordexp_t expanded;
-    wordexp(BLOCKSPREFIX, &expanded, 0);
-    copy_buffer(blocks_path, expanded.we_wordv[0], BLOCKS_PATH_LEN);
-    wordfree(&expanded);
+/* expands and resolves blocks path with environment variables */
+bool expand_blocks_path() {
+    const char *prefix = BLOCKSPREFIX;
+    wordexp_t exp_result;
+    char resolved_path[PATH_MAX] = {0};
+
+    /* expand environment variables */
+    switch (wordexp(prefix, &exp_result, 0)) {
+    case 0:  // Success
+        break;
+    case WRDE_NOSPACE:
+        wordfree(&exp_result);
+        log_error("wordexp: Out of memory while expanding '%s'", prefix);
+        return false;
+    default:
+        log_error("failed to expand environment variables in '%s'", prefix);
+        return false;
+    }
+
+    /* verify we got exactly one expansion result */
+    if (exp_result.we_wordc != 1) {
+        log_error("invalid path expansion for '%s' (got %zu results)", prefix, exp_result.we_wordc);
+        wordfree(&exp_result);
+        return false;
+    }
+
+    /* get absolute path */
+    if (realpath(exp_result.we_wordv[0], resolved_path) == NULL) {
+        log_error("failed to resolve blocks path '%s' -> '%s': %s", prefix, exp_result.we_wordv[0], strerror(errno));
+        wordfree(&exp_result);
+        return false;
+    }
+
+    copy_buffer(blocks_path, resolved_path, PATH_MAX);
+    wordfree(&exp_result);
+    return true;
 }
 
-/* Opens process *current_command and stores output in *output */
+/* opens process *current_command and stores output in *output */
 void run_block_command(int block_index, int button) {
     pthread_mutex_lock(&run_command_lock);
 
@@ -240,15 +272,26 @@ void run_block_command(int block_index, int button) {
     char *output = blocks_cache[block_index];
 
     reset_buffer(output, BLOCK_OUTPUT_LEN);
-    reset_buffer(current_command, BLOCK_CMD_LEN);
+    reset_buffer(current_command, FULL_CMD_LEN);
 
     copy_buffer(output, empty_block, EMPTY_BLOCK_SIZE);
 
     FILE *command_file;
+
+    /* build command path directly into current_command */
+    snprintf(current_command, FULL_CMD_LEN, "%s/%s", blocks_path, block->command);
+
+    /* verify command exists and is executable */
+    if (access(current_command, X_OK) != 0) {
+        log_error("block command not executable: %s", current_command);
+        pthread_mutex_unlock(&run_command_lock);
+        return;
+    }
+
     if (button) {
-        snprintf(current_command, BLOCK_CMD_LEN, "BLOCK_BUTTON=%d %s/%s", button, blocks_path, block->command);
+        snprintf(current_command, FULL_CMD_LEN, "BLOCK_BUTTON=%d %s/%s", button, blocks_path, block->command);
     } else {
-        snprintf(current_command, BLOCK_CMD_LEN, "%s/%s", blocks_path, block->command);
+        snprintf(current_command, FULL_CMD_LEN, "%s/%s", blocks_path, block->command);
     }
 
     log_debug("executing command: '%s'", current_command);
@@ -705,8 +748,7 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
             block_index = strtol(block_name_buffer, &endptr, 10);
             if (endptr == block_name_buffer ||  // No digits parsed
                 *endptr != '\0' ||              // Extra characters after number
-                block_index < 1 ||
-                block_index > (int)BLOCKS_AMOUNT) {
+                block_index < 1 || block_index > (int)BLOCKS_AMOUNT) {
                 log_error("invalid block index: %d", block_index);
                 return;
             }
@@ -729,8 +771,15 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
 /* execution flow */
 
 bool setup() {
-    /* expand full blocks path in case it has '~' or any env variables */
-    expand_blocks_path();
+    /* expand and validate blocks path */
+    if (!expand_blocks_path()) return false;
+
+    /* verify blocks directory exists */
+    struct stat st;
+    if (stat(blocks_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        log_error("blocks directory does not exist: %s", blocks_path);
+        return false;
+    }
 
     /* create fifo */
     remove_fifo_if_exists();
