@@ -4,7 +4,7 @@
 static const char fifo_path[] = "/tmp/dwmbar.fifo";
 
 /* maximum length of a single block */
-#define BLOCK_OUTPUT_LEN 1000
+#define BLOCK_OUTPUT_LEN 100
 
 /* delimiter for blocks
  * set to NULL to don't show delimiter
@@ -51,6 +51,7 @@ static const Service services[] = {
     { "xkb-switch -w",          1,  Keyboard,   NULL },
     { "acpi_listen",            0,  Volume,     NULL },
     { "playerctl -F status",    0,  Player,     NULL },
+    { "playerctl -F metadata -f '{{ xesam:title }}'", 0, Player, NULL },
 
     // TODO: implement patterns
     // { "mpc idle",               1,  Player,     {"player"} },

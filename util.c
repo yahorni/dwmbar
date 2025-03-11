@@ -81,7 +81,7 @@ pid_t process_open(const char *program, int *pout) {
     case 0: /* child */
         (void)close(pipe_fds[0]);
         (void)dup2(pipe_fds[1], STDOUT_FILENO);
-
+        setpgid(0, 0);
         argp[2] = (char *)program;
         execve("/bin/sh", argp, environ);
         _exit(127);

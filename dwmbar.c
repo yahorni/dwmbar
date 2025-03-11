@@ -503,12 +503,19 @@ void stop_service(ServiceContext *ctx) {
 
     /* finish process */
     log_debug(SERVICE_LOG "sending signal to terminate", ctx->command);
-    if (kill(ctx->pid, SIGTERM) < 0) log_error(SERVICE_LOG "kill() with SIGTERM failed:", ctx->command);
+    if (kill(-ctx->pid, SIGTERM) < 0) log_error(SERVICE_LOG "kill() with SIGTERM failed:", ctx->command);
 
     /* wait for process */
     log_debug(SERVICE_LOG "waiting for process to terminate", ctx->command);
     int wait_status;
-    if (waitpid(ctx->pid, &wait_status, 0) < 0) log_error(SERVICE_LOG "waitpid() failed:", ctx->command);
+    int result = waitpid(ctx->pid, &wait_status, WNOHANG);
+    if (result == 0) {
+        /* still running - force kill immediately */
+        if (kill(-ctx->pid, SIGKILL) < 0 && errno != ESRCH)
+            log_warn(SERVICE_LOG "kill() with SIGKILL failed:", ctx->command);
+    } else if (result < 0 && errno != ECHILD) {
+        log_warn(SERVICE_LOG "waitpid() failed:", ctx->command);
+    }
 
     log_debug(SERVICE_LOG "service stopped", ctx->command);
 }
