@@ -1,12 +1,11 @@
 /* See LICENSE file for copyright and license details. */
 
-#include <linux/limits.h>
-#include <wordexp.h>
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <X11/Xlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <linux/limits.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -19,6 +18,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <wordexp.h>
 
 #include "util.h"
 
@@ -57,7 +57,7 @@ struct BlockLenCheck {
 #define SERVICE_READ_BUFFER_LEN 511
 
 /* logging */
-#define SERVICE_LOG "service '%s': "
+#define SERVICE_LOG "service <%s>: "
 #define UPDATER_LOG "updater: "
 
 /* internal types */
