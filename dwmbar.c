@@ -32,7 +32,7 @@ typedef struct {
     char *command;
     bool oneshot;
     int block_index;
-    char *pattern;
+    char *filter;
 } Service;
 
 /* configuration */
@@ -60,6 +60,10 @@ struct BlockLenCheck {
 #define SERVICE_LOG "service <%s>: "
 #define UPDATER_LOG "updater: "
 
+/* errors */
+#define EREADFAILED 1
+#define EREADFILTERED 2
+
 /* internal types */
 
 typedef struct {
@@ -68,9 +72,10 @@ typedef struct {
 } ServiceThreadArgs;
 
 typedef struct {
-    char *command;
     int block_index;
     int pipe_fd;
+    char *command;
+    char *filter;
     char *read_buffer;
     pid_t pid;
     int process_fd;
@@ -130,7 +135,7 @@ static void cleanup_updater();
 static void *run_service(void *vargp);
 static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
-static bool read_from_service(ServiceContext *ctx);
+static int read_from_service(ServiceContext *ctx);
 static void stop_service(ServiceContext *ctx);
 static bool start_services();
 static void cleanup_service(int index);
@@ -204,7 +209,7 @@ void update_status_buffer() {
     copy_buffer(old_status, new_status, BAR_LEN);
 
     /* update status */
-    log_debug("new status:\n%s", new_status);
+    log_debug("new status: >>>%s<<<", new_status);
     set_x11_status(new_status);
 
     /* clear new status */
@@ -398,9 +403,10 @@ void *run_service(void *vargp) {
     ServiceThreadArgs *args = vargp;
     char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
     ServiceContext ctx = {
-        .command = args->service->command,
         .block_index = args->service->block_index,
         .pipe_fd = args->pipe_fd,
+        .command = args->service->command,
+        .filter = args->service->filter,
         .read_buffer = read_buffer,
     };
 
@@ -423,7 +429,7 @@ void run_oneshot_service(ServiceContext *ctx) {
 
         log_debug(SERVICE_LOG "pid: %d", ctx->command, ctx->pid);
 
-        if (read_from_service(ctx)) {
+        if (!read_from_service(ctx)) {
             run_block_command(ctx->block_index, 0);
             update_status_buffer();
         }
@@ -441,17 +447,22 @@ void run_continuous_service(ServiceContext *ctx) {
     log_debug(SERVICE_LOG "pid: %d", ctx->command, ctx->pid);
 
     while (is_running) {
-        if (read_from_service(ctx)) {
+        int read_code = read_from_service(ctx);
+        if (!read_code) {
             run_block_command(ctx->block_index, 0);
             update_status_buffer();
-        } else {
+        } else if (read_code == EREADFAILED) {
             stop_service(ctx);
             return;
         }
     }
 }
 
-bool read_from_service(ServiceContext *ctx) {
+// Return:
+// 1  - successful read
+// 0  - service failed
+// -1 - message filtered
+int read_from_service(ServiceContext *ctx) {
     /* no need to check max(process_fd, pipe_fd) as pipe_fd created earlier */
     int nfds = ctx->process_fd + 1;
     fd_set read_fds;
@@ -465,7 +476,7 @@ bool read_from_service(ServiceContext *ctx) {
             log_debug(SERVICE_LOG "select() caught signal:", ctx->command);
         else
             log_error(SERVICE_LOG "select() failed:", ctx->command);
-        return false;
+        return EREADFAILED;
     }
 
     if (FD_ISSET(ctx->process_fd, &read_fds)) {
@@ -475,25 +486,28 @@ bool read_from_service(ServiceContext *ctx) {
         /* TODO: handle multiple read failed to not run infinitely */
         if (nread < 0) {
             log_error(SERVICE_LOG "read() failed:", ctx->command);
-            return false;
+            return EREADFAILED;
         }
 
         if (nread > 0) {
             ctx->read_buffer[nread] = '\0';
+            if (ctx->filter && !strstr(ctx->read_buffer, ctx->filter)) {
+                return EREADFILTERED;
+            }
             log_debug(SERVICE_LOG "message: %s", ctx->command, ctx->read_buffer);
         } else {
             log_debug(SERVICE_LOG "read() received EOF", ctx->command);
         }
-        return true;
+        return 0;
 
     } else if (FD_ISSET(ctx->pipe_fd, &read_fds)) {
         log_debug(SERVICE_LOG "received message to stop", ctx->command);
-        return false;
+        return EREADFAILED;
     }
 
     /* unreachable? */
     log_error(SERVICE_LOG "unreachable read condition", ctx->command);
-    return false;
+    return EREADFAILED;
 }
 
 void stop_service(ServiceContext *ctx) {
