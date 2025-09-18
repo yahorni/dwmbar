@@ -35,20 +35,25 @@ enum BlockType {
 static const Block blocks[] = {
                       /* name */        /* command */       /* interval */
     [Player]      = { "player",         "playerctl.sh",     10 },
+    [VPN]         = { "vpn",            "tailscale.sh",     10 },
     [Volume]      = { "volume",         "pamixer.sh",       5  },
     [Network]     = { "network",        "network.sh",       5  },
     [RAM]         = { "ram",            "ram.sh",           5  },
     [CPU]         = { "cpu",            "cpu-bars.sh",      1  },
     [Temperature] = { "temperature",    "temperature.sh",   10 },
-    // TODO: set `xkb-switch` by default
+    // TODO: set `xkb-switch` directly (without script)
     [Keyboard]    = { "keyboard",       "xkb-switch.sh",    10 },
-    // TODO: set `date '+%R %d/%m/%Y %a'` by default
+    // TODO: set `date '+%R %d/%m/%Y %a'` directly (without script)
     [DateTime]    = { "datetime",       "datetime.sh",      60 },
 };
 
 /* long running services to listen for their output */
 static const Service services[] = {
-    { "xkb-switch -w",          1,  Keyboard,   NULL },
-    { "acpi_listen",            0,  Volume,     NULL },
-    { "playerctl -F status",    0,  Player,     NULL },
+    /* command */     /* oneshot*/  /* block index */   /* filter */
+    { "xkb-switch -w",          1,  Keyboard,           NULL },
+    { "pactl subscribe",        0,  Volume,             "Event 'change'" },
+    { "playerctl -F status",    0,  Player,             NULL },
+    { "playerctl -F metadata -f '{{ xesam:title }}'", 0, Player, NULL },
+    /* { "acpi_listen",            0,  Volume,             "button/" }, */
+    /* { "mpc idle",               1,  Player,             "player" }, */
 };
