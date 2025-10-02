@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <wordexp.h>
 
@@ -167,8 +168,8 @@ static void log_log(const char *level, FILE *f, const char *fmt, ...);
 #else
 #define log_debug(...) log_log("DEBUG", stdout, __VA_ARGS__)
 #endif
-#define log_info(...) log_log("INFO", stdout, __VA_ARGS__)
-#define log_warn(...) log_log("WARN", stderr, __VA_ARGS__)
+#define log_info(...) log_log("INFO ", stdout, __VA_ARGS__)
+#define log_warn(...) log_log("WARN ", stderr, __VA_ARGS__)
 #define log_error(...) log_log("ERROR", stderr, __VA_ARGS__)
 
 /* function implementations */
@@ -209,7 +210,7 @@ void update_status_buffer() {
     copy_buffer(old_status, new_status, BAR_LEN);
 
     /* update status */
-    log_debug("new status: >>>%s<<<", new_status);
+    /* log_debug("new status: >>>%s<<<", new_status); */
     set_x11_status(new_status);
 
     /* clear new status */
@@ -353,9 +354,9 @@ void *periodic_updater(void *vargp) {
         fd_set read_fds;
         FD_ZERO(&read_fds);
         FD_SET(updater_pipe[0], &read_fds);
-        struct timeval tv = {1, 0};
+        struct timeval timeout = {1, 0};  // 1s
 
-        int retval = select(updater_pipe[0] + 1, &read_fds, NULL, NULL, &tv);
+        int retval = select(updater_pipe[0] + 1, &read_fds, NULL, NULL, &timeout);
         if (retval < 0) {
             if (errno == EINTR)
                 log_debug(UPDATER_LOG "select() caught signal:");
@@ -379,6 +380,8 @@ bool start_updater() {
         return false;
     }
 
+    log_debug(UPDATER_LOG "pipe() created: [%d,%d]", updater_pipe[0], updater_pipe[1]);
+
     if (pthread_create(&updater_thread_id, NULL, &periodic_updater, NULL)) {
         log_error(UPDATER_LOG "pthread_create() failed");
         return false;
@@ -388,7 +391,7 @@ bool start_updater() {
 }
 
 void cleanup_updater() {
-    log_debug(UPDATER_LOG "cleaning up...");
+    log_debug(UPDATER_LOG "cleaning up, pipe [%d,%d]", updater_pipe[0], updater_pipe[1]);
     write(updater_pipe[1], "", 1);
     pthread_join(updater_thread_id, NULL);
 
@@ -471,6 +474,7 @@ int read_from_service(ServiceContext *ctx) {
     FD_SET(ctx->process_fd, &read_fds);
     FD_SET(ctx->pipe_fd, &read_fds);
 
+    // TODO: handle signals for the child processes
     if (select(nfds, &read_fds, NULL, NULL, NULL) < 0) {
         if (errno == EINTR)
             log_debug(SERVICE_LOG "select() caught signal:", ctx->command);
@@ -479,6 +483,7 @@ int read_from_service(ServiceContext *ctx) {
         return EREADFAILED;
     }
 
+    log_debug(SERVICE_LOG "processing select", ctx->command);
     if (FD_ISSET(ctx->process_fd, &read_fds)) {
         log_debug(SERVICE_LOG "ready to read", ctx->command);
 
@@ -517,18 +522,26 @@ void stop_service(ServiceContext *ctx) {
 
     /* finish process */
     log_debug(SERVICE_LOG "sending signal to terminate", ctx->command);
-    if (kill(-ctx->pid, SIGTERM) < 0) log_error(SERVICE_LOG "kill() with SIGTERM failed:", ctx->command);
+    if (kill(ctx->pid, SIGTERM) < 0) log_error(SERVICE_LOG "kill() with SIGTERM failed:", ctx->command);
 
     /* wait for process */
     log_debug(SERVICE_LOG "waiting for process to terminate", ctx->command);
-    int wait_status;
-    int result = waitpid(ctx->pid, &wait_status, WNOHANG);
-    if (result == 0) {
-        /* still running - force kill immediately */
-        if (kill(-ctx->pid, SIGKILL) < 0 && errno != ESRCH)
+
+    /* wait up to 1 seconds for graceful termination */
+    struct timespec delay = {0, 100000};
+    for (int i = 0; i < 10; i++) {
+        if (waitpid(ctx->pid, NULL, WNOHANG) > 0) {
+            log_debug(SERVICE_LOG "service stopped", ctx->command);
+            return;
+        }
+        nanosleep(&delay, NULL);
+    }
+
+    /* force kill if still running */
+    if (waitpid(ctx->pid, NULL, WNOHANG) == 0) {
+        if (kill(ctx->pid, SIGKILL) < 0 && errno != ESRCH)
             log_warn(SERVICE_LOG "kill() with SIGKILL failed:", ctx->command);
-    } else if (result < 0 && errno != ECHILD) {
-        log_warn(SERVICE_LOG "waitpid() failed:", ctx->command);
+        waitpid(ctx->pid, NULL, 0);
     }
 
     log_debug(SERVICE_LOG "service stopped", ctx->command);
@@ -542,9 +555,18 @@ bool start_services() {
             break;
         }
 
+        log_debug(SERVICE_LOG "pipe() created: [%d,%d]", services[i].command,  //
+                  services_pipes[i][0], services_pipes[i][1]);
         services_args[i].service = (Service *)&services[i];
         services_args[i].pipe_fd = services_pipes[i][0];
+    }
 
+    /* split to two cycles, because when tried to create a pipe and a thread in a single iteration,
+     * a weird problem appears: during stop_service, the last service is not receiving a stop signal from select().
+     * not sure, why though
+     */
+
+    for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         if (pthread_create(&services_thread_ids[i], NULL, &run_service, (void *)&services_args[i])) {
             log_error(SERVICE_LOG "pthread_create() failed", services[i].command);
             break;
@@ -552,11 +574,6 @@ bool start_services() {
 
         started++;
     }
-
-    /* ignoring opened pipes because they would be closed by OS,
-     * but stopping threads because they can already run some forked child process
-     * which will remain after program exit
-     */
 
     if (started != SERVICES_AMOUNT) {
         for (int i = 0; i < started; i++)
@@ -570,9 +587,13 @@ bool start_services() {
 
 void cleanup_service(int index) {
     const char *command = services[index].command;
-    log_debug(SERVICE_LOG "cleaning up...", command);
+
+    log_debug(SERVICE_LOG "cleaning up, pipe [%d,%d]", command, services_pipes[index][0], services_pipes[index][1]);
     write(services_pipes[index][1], "", 1);
+
+    log_debug(SERVICE_LOG "joining thread...", command);
     pthread_join(services_thread_ids[index], NULL);
+
     log_info(SERVICE_LOG "stopped", command);
 
     close(services_pipes[index][0]);
