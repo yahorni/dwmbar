@@ -1,8 +1,8 @@
 diff --git a/config.def.h b/config.def.h
-index 9efa774..9cfddb3 100644
+index 6f014e4..2c41005 100644
 --- a/config.def.h
 +++ b/config.def.h
-@@ -104,7 +104,16 @@ static const Button buttons[] = {
+@@ -115,7 +115,16 @@ static const Button buttons[] = {
  	{ ClkLtSymbol,          0,              Button1,        setlayout,      {0} },
  	{ ClkLtSymbol,          0,              Button3,        setlayout,      {.v = &layouts[2]} },
  	{ ClkWinTitle,          0,              Button2,        zoom,           {0} },
@@ -20,19 +20,19 @@ index 9efa774..9cfddb3 100644
  	{ ClkClientWin,         MODKEY,         Button1,        movemouse,      {0} },
  	{ ClkClientWin,         MODKEY,         Button2,        togglefloating, {0} },
  	{ ClkClientWin,         MODKEY,         Button3,        resizemouse,    {0} },
-@@ -114,3 +123,5 @@ static const Button buttons[] = {
+@@ -125,3 +134,5 @@ static const Button buttons[] = {
  	{ ClkTagBar,            MODKEY,         Button3,        toggletag,      {0} },
  };
  
 +/* bar settings */
 +static const char barfifo[] = "/tmp/dwmbar.fifo";
 diff --git a/dwm.c b/dwm.c
-index 1443802..1c438ef 100644
+index a3dccb7..8cf0aad 100644
 --- a/dwm.c
 +++ b/dwm.c
-@@ -267,6 +267,14 @@ static Drw *drw;
- static Monitor *mons, *selmon;
- static Window root, wmcheckwin;
+@@ -330,6 +330,14 @@ static Window root, wmcheckwin;
+ 
+ static xcb_connection_t *xcon;
  
 +/* bar */
 +#include <sys/stat.h>
@@ -45,12 +45,12 @@ index 1443802..1c438ef 100644
  /* configuration, allows nested code to access above variables */
  #include "config.h"
  
-@@ -440,9 +448,23 @@ buttonpress(XEvent *e)
+@@ -577,9 +585,23 @@ buttonpress(XEvent *e)
  			arg.ui = 1 << i;
  		} else if (ev->x < x + TEXTW(selmon->ltsymbol))
  			click = ClkLtSymbol;
--		else if (ev->x > selmon->ww - (int)TEXTW(stext))
-+		else if (ev->x > (x = selmon->ww - (int)TEXTW(stext) + lrpad / 2 - 2)) {
+-		else if (ev->x > selmon->ww - (int)TEXTW(stext) - getsystraywidth())
++		else if (ev->x > (x = selmon->ww - (int)TEXTW(stext) - getsystraywidth() + lrpad / 2 - 2)) {
  			click = ClkStatusText;
 -		else
 +			char *text = rawstext;
@@ -71,7 +71,7 @@ index 1443802..1c438ef 100644
  			click = ClkWinTitle;
  	} else if ((c = wintoclient(ev->window))) {
  		focus(c);
-@@ -456,6 +478,33 @@ buttonpress(XEvent *e)
+@@ -593,6 +615,33 @@ buttonpress(XEvent *e)
  			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
  }
  
@@ -105,7 +105,7 @@ index 1443802..1c438ef 100644
  void
  checkotherwm(void)
  {
-@@ -2004,8 +2053,10 @@ updatesizehints(Client *c)
+@@ -2467,8 +2516,10 @@ updatesizehints(Client *c)
  void
  updatestatus(void)
  {
@@ -115,5 +115,5 @@ index 1443802..1c438ef 100644
 +	else
 +		copyvalidchars(stext, rawstext);
  	drawbar(selmon);
+ 	updatesystray();
  }
- 
