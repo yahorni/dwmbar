@@ -1,4 +1,5 @@
-#!/bin/dash
+#!/usr/bin/env dash
+set -e
 
 # Module showing CPU load as a changing bars.
 # Just like in polybar.
@@ -8,7 +9,7 @@
 # Cache in tmpfs to improve speed and reduce SSD load
 cache=/tmp/cpubarscache
 
-case $BLOCK_BUTTON in
+case "$BLOCK_BUTTON" in
     2) setsid -f "$TERMINAL" -e htop ;;
     3) notify-send "🖥 CPU load module" "Each bar represents
 one CPU core";;
@@ -30,15 +31,17 @@ echo "$stats" | while read -r row; do
         printf "%d\n", (1 - (idle - $3)  / (total - $2))*100 /12.5}' \
         id="$id" total="$total" idle="$idle")" in
 
-        "0") printf "▁";;
-        "1") printf "▂";;
-        "2") printf "▃";;
-        "3") printf "▄";;
-        "4") printf "▅";;
-        "5") printf "▆";;
-        "6") printf "▇";;
-        "7") printf "█";;
-        "8") printf "█";;
+        "0") printf "▁" ;;
+        "1") printf "▂" ;;
+        "2") printf "▃" ;;
+        # for some reason this one is wider than others from the set
+        # "3") printf "▄" ;;
+        "3") printf "▅" ;;
+        "4") printf "▆" ;;
+        "5") printf "▇" ;;
+        "6") printf "▇" ;;
+        "7") printf "█" ;;
+        "8") printf "▉" ;;
     esac
 done; printf "\\n"
 echo "$stats" > "$cache"

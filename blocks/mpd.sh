@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -e
 
 handle_block_button() {
     case "$BLOCK_BUTTON" in

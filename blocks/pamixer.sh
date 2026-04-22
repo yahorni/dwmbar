@@ -1,12 +1,13 @@
-#!/bin/dash
+#!/usr/bin/env dash
+set -e
 
 cmd="pamixer --get-mute --get-volume"
 
-case $BLOCK_BUTTON in
+case "$BLOCK_BUTTON" in
     1) status=$($cmd --toggle-mute) ;;
     3) status=$($cmd) ; setsid "$TERMINAL" -e pulsemixer >/dev/null 2>&1 & ;;
-    4) status=$($cmd --decrease 3 --allow-boost) ;;
-    5) status=$($cmd --increase 3 --allow-boost) ;;
+    4) status=$($cmd --decrease 5 --allow-boost) ;;
+    5) status=$($cmd --increase 5 --allow-boost) ;;
     9) status=$($cmd --decrease 1 --allow-boost) ;;
    10) status=$($cmd --increase 1 --allow-boost) ;;
     *) status=$($cmd) ;;

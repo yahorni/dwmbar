@@ -1,6 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -e
 
-case $BLOCK_BUTTON in
+case "$BLOCK_BUTTON" in
     1) amixer set Master toggle >/dev/null ;;
     3) setsid "$TERMINAL" -e alsamixer & disown ;;
     4) amixer set Master 5%- >/dev/null ;;

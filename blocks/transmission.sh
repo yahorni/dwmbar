@@ -1,6 +1,7 @@
-#!/bin/dash
+#!/usr/bin/env dash
+set -e
 
-case $BLOCK_BUTTON in
+case "$BLOCK_BUTTON" in
     1) pgrep -x dunst >/dev/null && notify-send "Transmission" "🛑: paused
 ⏳: idle (seeds needed)
 🔼: uploading (unfinished)

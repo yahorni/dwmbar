@@ -1,6 +1,7 @@
-#!/bin/dash
+#!/usr/bin/env dash
+set -e
 
-case $BLOCK_BUTTON in
+case "$BLOCK_BUTTON" in
     1)  backlight_dump="/tmp/backlight_dump"
         if [ "$(xbacklight -get)" -eq 1 ]; then
             [ -f "$backlight_dump" ] && xbacklight -set "$(cat $backlight_dump)"

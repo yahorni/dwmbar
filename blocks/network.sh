@@ -1,4 +1,5 @@
-#!/bin/dash
+#!/usr/bin/env dash
+set -e
 
 # Show 📡 and percent strength if connected to wifi
 # Show 📶 if connected to ethernet
@@ -6,7 +7,7 @@
 
 # TODO: show external IP address
 
-case $BLOCK_BUTTON in
+case "$BLOCK_BUTTON" in
     1) notify-send "🌐 Network" "\
 📡: wifi connection with quality
 📶: ethernet connection

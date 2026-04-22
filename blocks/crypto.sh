@@ -1,4 +1,5 @@
-#!/bin/dash
+#!/usr/bin/env dash
+set -e
 
 price_btc="$(curl -s "rate.sx/1btc")"
 price_eth="$(curl -s "rate.sx/1eth")"
