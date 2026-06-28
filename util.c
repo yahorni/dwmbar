@@ -81,19 +81,23 @@ size_t remove_from_buffer(char *buf, char to_remove) {
 
 extern char **environ;
 
-pid_t process_open(const char *program, int *pout) {
+void process_open(const char *restrict program, int *restrict pipe_out, pid_t *restrict pid_out) {
     /* no stdin as we don't need to write to the process */
     char *argp[] = {"sh", "-c", NULL, NULL};
     int pipe_fds[2];
     pid_t pid;
 
-    if (pipe(pipe_fds) < 0) return -1;
+    if (pipe(pipe_fds) < 0) {
+        *pid_out = -1;
+        return;
+    }
 
     switch (pid = fork()) {
     case -1: /* error */
         (void)close(pipe_fds[0]);
         (void)close(pipe_fds[1]);
-        return -1;
+        *pid_out = -1;
+        return;
     case 0: /* child */
         (void)close(pipe_fds[0]);
         (void)dup2(pipe_fds[1], STDOUT_FILENO);
@@ -105,6 +109,7 @@ pid_t process_open(const char *program, int *pout) {
 
     /* parent */
     (void)close(pipe_fds[1]);
-    *pout = pipe_fds[0];
-    return pid;
+
+    *pipe_out = pipe_fds[0];
+    *pid_out = pid;
 }

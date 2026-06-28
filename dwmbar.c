@@ -426,7 +426,8 @@ void *run_service(void *vargp) {
 
 void run_oneshot_service(ServiceContext *ctx) {
     while (is_running) {
-        if ((ctx->pid = process_open(ctx->command, &ctx->process_fd)) == -1) {
+        process_open(ctx->command, &ctx->process_fd, &ctx->pid);
+        if (ctx->pid == -1) {
             log_error(SERVICE_LOG "failed to run:", ctx->command);
             return;
         }
@@ -443,7 +444,8 @@ void run_oneshot_service(ServiceContext *ctx) {
 }
 
 void run_continuous_service(ServiceContext *ctx) {
-    if ((ctx->pid = process_open(ctx->command, &ctx->process_fd)) == -1) {
+    process_open(ctx->command, &ctx->process_fd, &ctx->pid);
+    if (ctx->pid == -1) {
         log_error(SERVICE_LOG "failed to run:", ctx->command);
         return;
     }

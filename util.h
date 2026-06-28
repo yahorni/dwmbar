@@ -12,4 +12,4 @@ void copy_buffer(char *dst, const char *src, size_t size);
 size_t remove_from_buffer(char *buf, char toRemove);
 
 /* simple popen2 implementation */
-pid_t process_open(const char *command, int *pout);
+void process_open(const char *program, int *pipe_out, pid_t *pid_out);
