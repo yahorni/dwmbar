@@ -891,9 +891,12 @@ void run(void) {
 
 /* logging */
 void log_log(const char *level, FILE *f, const char *fmt, ...) {
+    static char current_time[20];
+    get_current_time(current_time, 20);
+
     /* not thread safe logging */
     /* TODO: flockfile/funlockfile? */
-    fprintf(f, "dwmbar(%s): ", level);
+    fprintf(f, "%s dwmbar(%s): ", current_time, level);
     va_list ap;
     va_start(ap, fmt);
     vfprintf(f, fmt, ap);

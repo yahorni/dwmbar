@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "util.h"
@@ -13,6 +14,21 @@ int is_number(const char *str, unsigned long buf_max_len) {
         if (!isdigit(str[i])) return 0;
 
     return 1;
+}
+
+void get_current_time(char *const buffer, int size) {
+    static const char *format = "%Y-%m-%d %H:%M:%S";
+
+    time_t now = time(0);
+#ifdef __STDC_LIB_EXT1__
+    struct tm sTm;
+    gmtime_s(&now, &sTm);
+    strftime(buffer, size, format, &sTm);
+#else
+    struct tm *sTm;
+    sTm = gmtime(&now);
+    strftime(buffer, size, format, sTm);
+#endif
 }
 
 /* buffer manipulation helpers */

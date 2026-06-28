@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 int is_number(const char *str, unsigned long buf_max_len);
+void get_current_time(char *const buffer, int size);
 
 /* buffer manipulation helpers */
 void reset_buffer(char *buf, size_t size);
