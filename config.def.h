@@ -51,9 +51,9 @@ static const Block blocks[] = {
 static const Service services[] = {
     /* command */     /* oneshot*/  /* block index */   /* filter */
     { "xkb-switch -w",          1,  Keyboard,           NULL },
-    { "pactl subscribe",        0,  Volume,             "Event 'change'" },
+    { "pactl subscribe",        0,  Volume,             " on client #" },
     { "playerctl -F status",    0,  Player,             NULL },
-    { "playerctl -F metadata -f '{{ xesam:title }}'", 0, Player, NULL },
+    /* { "playerctl -F metadata -f '{{ xesam:title }}'", 0, Player, NULL }, */
     /* { "acpi_listen",            0,  Volume,             "button/" }, */
     /* { "mpc idle",               1,  Player,             "player" }, */
 };

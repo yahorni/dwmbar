@@ -1,7 +1,9 @@
 /* See LICENSE file for copyright and license details. */
 
+#define _GNU_SOURCE
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <X11/Xlib.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -79,6 +81,7 @@ typedef struct {
     const char *filter;
 
     char *read_buffer;
+    int filter_len;
     pid_t pid;
     int process_fd;
 } ServiceContext;
@@ -138,6 +141,7 @@ static void *run_service(void *vargp);
 static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
 static int read_from_service(ServiceContext *ctx);
+static bool is_service_message_filtered(const char *message, const char *filter, int filter_len);
 static void stop_service(ServiceContext *ctx);
 static bool start_services(void);
 static void cleanup_service(int index);
@@ -411,10 +415,16 @@ void *run_service(void *vargp) {
         .pipe_fd = args->pipe_fd,
         .command = args->service->command,
         .filter = args->service->filter,
+
         .read_buffer = read_buffer,
     };
 
     log_info(SERVICE_LOG "starting for block '%s'", ctx.command, blocks[ctx.block_index].name);
+
+    if (ctx.filter) {
+        ctx.filter_len = strlen(ctx.filter);
+        log_info(SERVICE_LOG "set filter to '%s'", ctx.command, ctx.filter);
+    }
 
     if (args->service->oneshot)
         run_oneshot_service(&ctx);
@@ -464,6 +474,28 @@ void run_continuous_service(ServiceContext *ctx) {
     }
 }
 
+bool is_service_message_filtered(const char *message, const char *filter, int filter_len) {
+    assert(filter);
+
+    const char *msg_start = message;
+    const char *msg_end;
+    while ((msg_end = strchr(msg_start, '\n')) != NULL) {
+        size_t msg_len = msg_end - msg_start;
+        if (msg_len && !memmem(msg_start, msg_len, filter, filter_len)) {
+            return false;
+        }
+        msg_start = msg_end + 1;
+    }
+    if (*msg_start != '\0') {
+        size_t msg_len = strlen(msg_start);
+        if (msg_len && !memmem(msg_start, msg_len, filter, filter_len)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // Return:
 // 1  - successful read
 // 0  - service failed
@@ -499,10 +531,14 @@ int read_from_service(ServiceContext *ctx) {
 
         if (nread > 0) {
             ctx->read_buffer[nread] = '\0';
-            if (ctx->filter && !strstr(ctx->read_buffer, ctx->filter)) {
-                return EREADFILTERED;
-            }
             log_debug(SERVICE_LOG "message: %s", ctx->command, ctx->read_buffer);
+
+            if (ctx->filter && is_service_message_filtered(ctx->read_buffer, ctx->filter, ctx->filter_len)) {
+                log_debug(SERVICE_LOG "message filtered", ctx->command);
+                return EREADFILTERED;
+            } else {
+                return 0;
+            }
         } else {
             log_debug(SERVICE_LOG "read() received EOF", ctx->command);
         }
@@ -510,12 +546,12 @@ int read_from_service(ServiceContext *ctx) {
 
     } else if (FD_ISSET(ctx->pipe_fd, &read_fds)) {
         log_debug(SERVICE_LOG "received message to stop", ctx->command);
-        return EREADFAILED;
+        return false;
     }
 
-    /* unreachable? */
+    assert(false && "unreachable read condition");
     log_error(SERVICE_LOG "unreachable read condition", ctx->command);
-    return EREADFAILED;
+    return false;
 }
 
 void stop_service(ServiceContext *ctx) {
@@ -558,9 +594,9 @@ bool start_services(void) {
             break;
         }
 
-        log_debug(SERVICE_LOG "pipe() created: [%d,%d]", services[i].command,  //
-                  services_pipes[i][0], services_pipes[i][1]);
-        services_args[i].service = (Service *)&services[i];
+        log_debug(SERVICE_LOG "pipe() created: [%d,%d]",  //
+                  services[i].command, services_pipes[i][0], services_pipes[i][1]);
+        services_args[i].service = &services[i];
         services_args[i].pipe_fd = services_pipes[i][0];
     }
 
