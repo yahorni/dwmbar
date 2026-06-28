@@ -68,15 +68,16 @@ struct BlockLenCheck {
 /* internal types */
 
 typedef struct {
-    Service *service;
+    const Service *service;
     int pipe_fd;
 } ServiceThreadArgs;
 
 typedef struct {
-    int block_index;
-    int pipe_fd;
-    char *command;
-    char *filter;
+    const int block_index;
+    const int pipe_fd;
+    const char *command;
+    const char *filter;
+
     char *read_buffer;
     pid_t pid;
     int process_fd;
@@ -119,18 +120,18 @@ volatile sig_atomic_t is_running = 1;
 /* function declarations */
 
 /* status bar */
-static void update_status_buffer();
+static void update_status_buffer(void);
 static void set_x11_status(char *status);
 
 /* blocks */
-static bool expand_blocks_path();
+static bool expand_blocks_path(void);
 static void run_block_command(int block_index, int button);
 static int get_block_index(const char *name);
 
 /* periodic updater */
 static void *periodic_updater(void *vargp);
-static bool start_updater();
-static void cleanup_updater();
+static bool start_updater(void);
+static void cleanup_updater(void);
 
 /* services */
 static void *run_service(void *vargp);
@@ -138,18 +139,18 @@ static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
 static int read_from_service(ServiceContext *ctx);
 static void stop_service(ServiceContext *ctx);
-static bool start_services();
+static bool start_services(void);
 static void cleanup_service(int index);
 
 /* signals */
 static void signal_handler(int signum);
 static void restart_handler(int signum);
-static bool setup_signals();
+static bool setup_signals(void);
 
 /* fifo */
-static bool create_fifo();
-static int open_fifo();
-static int remove_fifo_if_exists();
+static bool create_fifo(void);
+static int open_fifo(void);
+static int remove_fifo_if_exists(void);
 static int read_from_fifo(int fifo_fd, char *fifo_buffer, sigset_t *sigset);
 
 /* commands */
@@ -157,9 +158,9 @@ static int parse_command(char *in, char *out, int *button);
 static void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer);
 
 /* execution flow */
-static bool setup();
-static void run();
-static void cleanup();
+static bool setup(void);
+static void run(void);
+static void cleanup(void);
 
 /* logging */
 static void log_log(const char *level, FILE *f, const char *fmt, ...);
@@ -176,7 +177,7 @@ static void log_log(const char *level, FILE *f, const char *fmt, ...);
 
 /* status bar */
 
-void update_status_buffer() {
+void update_status_buffer(void) {
     pthread_mutex_lock(&update_status_lock);
 
     /* position where to start writing */
@@ -233,7 +234,7 @@ void set_x11_status(char *status) {
 /* blocks */
 
 /* expands and resolves blocks path with environment variables */
-bool expand_blocks_path() {
+bool expand_blocks_path(void) {
     const char *prefix = BLOCKSPREFIX;
     wordexp_t exp_result;
     char resolved_path[PATH_MAX] = {0};
@@ -374,7 +375,7 @@ void *periodic_updater(void *vargp) {
     return NULL;
 }
 
-bool start_updater() {
+bool start_updater(void) {
     if (pipe(updater_pipe) < 0) {
         log_error(UPDATER_LOG "pipe() failed:");
         return false;
@@ -390,7 +391,7 @@ bool start_updater() {
     return true;
 }
 
-void cleanup_updater() {
+void cleanup_updater(void) {
     log_debug(UPDATER_LOG "cleaning up, pipe [%d,%d]", updater_pipe[0], updater_pipe[1]);
     write(updater_pipe[1], "", 1);
     pthread_join(updater_thread_id, NULL);
@@ -403,7 +404,7 @@ void cleanup_updater() {
 /* services */
 
 void *run_service(void *vargp) {
-    ServiceThreadArgs *args = vargp;
+    const ServiceThreadArgs *args = vargp;
     char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
     ServiceContext ctx = {
         .block_index = args->service->block_index,
@@ -547,7 +548,7 @@ void stop_service(ServiceContext *ctx) {
     log_debug(SERVICE_LOG "service stopped", ctx->command);
 }
 
-bool start_services() {
+bool start_services(void) {
     int started = 0;
     for (size_t i = 0; i < SERVICES_AMOUNT; i++) {
         if (pipe(services_pipes[i]) < 0) {
@@ -615,7 +616,7 @@ void restart_handler(int signum) {
     signal_handler(signum);
 }
 
-bool setup_signals() {
+bool setup_signals(void) {
     /* install signal handlers */
     struct sigaction sa_exit;
     sa_exit.sa_handler = signal_handler;
@@ -655,7 +656,7 @@ bool setup_signals() {
 
 /* fifo */
 
-bool create_fifo() {
+bool create_fifo(void) {
     /* create fifo */
     if (mkfifo(fifo_path, 0622) < 0) {
         log_error("mkfifo() failed:");
@@ -664,7 +665,7 @@ bool create_fifo() {
     return true;
 }
 
-int open_fifo() {
+int open_fifo(void) {
     /* https://stackoverflow.com/questions/21468856/check-if-file-is-a-named-pipe-fifo-in-c#comment32401662_21468960 */
 
     int fifo_fd = -1;
@@ -691,7 +692,7 @@ int open_fifo() {
     return fifo_fd;
 }
 
-int remove_fifo_if_exists() {
+int remove_fifo_if_exists(void) {
     if (unlink(fifo_path) == 0) {
         log_debug("removed FIFO");
         return true;
@@ -812,7 +813,7 @@ void handle_commands_from_fifo(char *fifo_buffer, char *block_name_buffer) {
 
 /* execution flow */
 
-bool setup() {
+bool setup(void) {
     /* expand and validate blocks path */
     if (!expand_blocks_path()) return false;
 
@@ -837,7 +838,7 @@ bool setup() {
     return true;
 }
 
-void cleanup() {
+void cleanup(void) {
     log_debug("cleaning up...");
 
     /* sigprocmask for multithreaded app */
@@ -856,7 +857,7 @@ void cleanup() {
     log_debug("clean up finished");
 }
 
-void run() {
+void run(void) {
     char fifo_buffer[FIFO_BUFFER_LEN + 1] = {0};
     char block_name_buffer[FIFO_BUFFER_LEN + 1] = {0};
 
