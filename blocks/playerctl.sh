@@ -46,7 +46,7 @@ parse_metadata() {
 get_current_song() {
     local song
     if [ -n "$title" ]; then
-        local title_length_max=40
+        local title_length_max=35
         [ "${#title}" -gt $title_length_max ] &&\
             title="${title:0:$((title_length_max - 3))}..."
 
