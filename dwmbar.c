@@ -32,10 +32,10 @@ typedef struct {
 } Block;
 
 typedef struct {
+    char *block_name;
     char *command;
-    bool oneshot;
-    int block_index;
     char *filter;
+    bool oneshot;
 } Service;
 
 /* configuration */
@@ -415,7 +415,7 @@ void *run_service(void *vargp) {
     const ServiceThreadArgs *args = vargp;
     char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
     ServiceContext ctx = {
-        .block_index = args->service->block_index,
+        .block_index = get_block_index(args->service->block_name),
         .pipe_fd = args->pipe_fd,
         .command = args->service->command,
         .filter = args->service->filter,

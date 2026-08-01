@@ -33,13 +33,14 @@ static const Block blocks[] = {
 };
 
 /* long running services to listen for their output */
+/* define USE_SERVICES to compile with services */
 #define USE_SERVICES
 static const Service services[] = {
-    /* command */     /* oneshot*/  /* block index */   /* filter */
-    { "xkb-switch -w",          1,  Keyboard,           NULL },
-    { "pactl subscribe",        0,  Volume,             " on client #" },
-    { "playerctl -F status",    0,  Player,             NULL },
-    /* { "playerctl -F metadata -f '{{ xesam:title }}'", 0, Player, NULL }, */
-    /* { "acpi_listen",            0,  Volume,             "button/" }, */
-    /* { "mpc idle",               1,  Player,             "player" }, */
+    /* block */     /* command */           /* filter */    /* oneshot */
+    { "keyboard",   "xkb-switch -w",        NULL,           0 },
+    { "volume",     "acpi_listen",          "button/",      0 },
+    // { "volume",     "pactl subscribe",      " on client #", 0 },
+    { "player",     "playerctl -F status",  NULL,           0 },
+    { "player",     "playerctl -F metadata -f '{{ xesam:title }}'", NULL, 0},
+    // { "player",     "mpc idle",             "player",       1 },
 };
