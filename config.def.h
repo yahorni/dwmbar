@@ -18,36 +18,22 @@ static const int with_spaces = 1;
 /* placeholder for block which doesn't output anything */
 static const char empty_block[] = "...";
 
-/* block types */
-enum BlockType {
-    Player,
-    VPN,
-    Volume,
-    Network,
-    RAM,
-    CPU,
-    Temperature,
-    Keyboard,
-    DateTime,
-};
-
 /* setup your blocks here */
+// TODO: implement using commands directly (without script), e.g. `xkb-switch` or `date '+%R %d/%m/%Y %a'`
 static const Block blocks[] = {
-                      /* name */        /* command */       /* interval */
-    [Player]      = { "player",         "playerctl.sh",     10 },
-    [VPN]         = { "vpn",            "tailscale.sh",     10 },
-    [Volume]      = { "volume",         "pamixer.sh",       5  },
-    [Network]     = { "network",        "network.sh",       5  },
-    [RAM]         = { "ram",            "ram.sh",           5  },
-    [CPU]         = { "cpu",            "cpu-bars.sh",      1  },
-    [Temperature] = { "temperature",    "temperature.sh",   10 },
-    // TODO: set `xkb-switch` directly (without script)
-    [Keyboard]    = { "keyboard",       "xkb-switch.sh",    10 },
-    // TODO: set `date '+%R %d/%m/%Y %a'` directly (without script)
-    [DateTime]    = { "datetime",       "datetime.sh",      60 },
+    /* name */      /* command */       /* interval */
+    { "player",     "playerctl.sh",     10  },
+    { "volume",     "pamixer.sh",       5   },
+    { "network",    "network.sh",       5   },
+    { "ram",        "ram.sh",           5   },
+    { "cpu",        "cpu-bars.sh",      1   },
+    { "temperature","temperature.sh",   10  },
+    { "keyboard",   "xkb-switch.sh",    10  },
+    { "datetime",   "datetime.sh",      60  },
 };
 
 /* long running services to listen for their output */
+#define USE_SERVICES
 static const Service services[] = {
     /* command */     /* oneshot*/  /* block index */   /* filter */
     { "xkb-switch -w",          1,  Keyboard,           NULL },

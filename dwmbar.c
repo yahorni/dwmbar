@@ -51,40 +51,18 @@ struct BlockLenCheck {
 };
 
 #define BLOCKS_AMOUNT (sizeof(blocks) / sizeof(blocks[0]))
-#define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
 #define EMPTY_BLOCK_SIZE (sizeof(empty_block) / sizeof(empty_block[0]))
 
 #define BLOCK_CMD_LEN 255
 #define FULL_CMD_LEN (PATH_MAX + BLOCK_CMD_LEN)
 #define FIFO_BUFFER_LEN 255
-#define SERVICE_READ_BUFFER_LEN 511
 
 /* logging */
-#define SERVICE_LOG "service <%s>: "
 #define UPDATER_LOG "updater: "
 
 /* errors */
 #define EREADFAILED 1
 #define EREADFILTERED 2
-
-/* internal types */
-
-typedef struct {
-    const Service *service;
-    int pipe_fd;
-} ServiceThreadArgs;
-
-typedef struct {
-    const int block_index;
-    const int pipe_fd;
-    const char *command;
-    const char *filter;
-
-    char *read_buffer;
-    int filter_len;
-    pid_t pid;
-    int process_fd;
-} ServiceContext;
 
 /* variables */
 
@@ -107,11 +85,6 @@ static Window root_window;
 /* periodic_updater */
 static pthread_t updater_thread_id;
 static int updater_pipe[2];
-
-/* services */
-static pthread_t services_thread_ids[SERVICES_AMOUNT];
-static int services_pipes[SERVICES_AMOUNT][2];
-static ServiceThreadArgs services_args[SERVICES_AMOUNT];
 
 /* signals */
 static sigset_t default_sigset;
@@ -136,7 +109,36 @@ static void *periodic_updater(void *vargp);
 static bool start_updater(void);
 static void cleanup_updater(void);
 
-/* services */
+#ifdef USE_SERVICES
+
+/* definitions */
+#define SERVICES_AMOUNT (sizeof(services) / sizeof(services[0]))
+#define SERVICE_READ_BUFFER_LEN 511
+#define SERVICE_LOG "service <%s>: "
+
+typedef struct {
+    const Service *service;
+    int pipe_fd;
+} ServiceThreadArgs;
+
+typedef struct {
+    const int block_index;
+    const int pipe_fd;
+    const char *command;
+    const char *filter;
+
+    char *read_buffer;
+    int filter_len;
+    pid_t pid;
+    int process_fd;
+} ServiceContext;
+
+/* variables */
+static pthread_t services_thread_ids[SERVICES_AMOUNT];
+static int services_pipes[SERVICES_AMOUNT][2];
+static ServiceThreadArgs services_args[SERVICES_AMOUNT];
+
+/* function declarations */
 static void *run_service(void *vargp);
 static void run_oneshot_service(ServiceContext *ctx);
 static void run_continuous_service(ServiceContext *ctx);
@@ -145,6 +147,8 @@ static bool is_service_message_filtered(const char *message, const char *filter,
 static void stop_service(ServiceContext *ctx);
 static bool start_services(void);
 static void cleanup_service(int index);
+
+#endif  // USE_SERVICES
 
 /* signals */
 static void signal_handler(int signum);
@@ -406,7 +410,7 @@ void cleanup_updater(void) {
 }
 
 /* services */
-
+#ifdef USE_SERVICES
 void *run_service(void *vargp) {
     const ServiceThreadArgs *args = vargp;
     char read_buffer[SERVICE_READ_BUFFER_LEN + 1];
@@ -640,6 +644,8 @@ void cleanup_service(int index) {
     log_debug(SERVICE_LOG "clean up finished", command);
 }
 
+#endif  // USE_SERVICES
+
 /* signals */
 
 void signal_handler(int signum) {
@@ -868,7 +874,9 @@ bool setup(void) {
 
     /* start threads */
     if (!start_updater()) return false;
+#ifdef USE_SERVICES
     if (!start_services()) return false;
+#endif  // USE_SERVICES
 
     /* setup signals after starting threads to not mess with their sigmask*/
     if (!setup_signals()) return false;
@@ -882,8 +890,10 @@ void cleanup(void) {
     /* sigprocmask for multithreaded app */
     pthread_sigmask(SIG_SETMASK, &default_sigset, 0);
 
+#ifdef USE_SERVICES
     for (size_t i = 0; i < SERVICES_AMOUNT; i++)
         cleanup_service(i);
+#endif  // USE_SERVICES
 
     cleanup_updater();
 
