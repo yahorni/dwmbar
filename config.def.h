@@ -22,7 +22,7 @@ static const char empty_block[] = "...";
 // TODO: implement using commands directly (without script), e.g. `xkb-switch` or `date '+%R %d/%m/%Y %a'`
 static const Block blocks[] = {
     /* name */      /* command */       /* interval */
-    { "player",     "playerctl.sh",     10  },
+    { "player",     "player.sh",        5   },
     { "volume",     "pamixer.sh",       5   },
     { "network",    "network.sh",       5   },
     { "ram",        "ram.sh",           5   },
