@@ -37,7 +37,8 @@ static const Block blocks[] = {
 #define USE_SERVICES
 static const Service services[] = {
     /* block */     /* command */           /* filter */    /* oneshot */
-    { "keyboard",   "xkb-switch -w",        NULL,           0 },
+    { "keyboard",   "xkb-switch -w",        NULL,           1 },
+    // { "keyboard",   "xkb-switch -W",        NULL,           0 },
     { "volume",     "acpi_listen",          "button/",      0 },
     // { "volume",     "pactl subscribe",      " on client #", 0 },
     { "player",     "playerctl -F status",  NULL,           0 },
