@@ -28,20 +28,17 @@ echo "$stats" | while read -r row; do
     idle=${rest##* }
 
     case "$(echo "$old" | awk '{if ($1 == id)
-        printf "%d\n", (1 - (idle - $3)  / (total - $2))*100 /12.5}' \
+        printf "%d\n", (1 - (idle - $3)  / (total - $2))*100 /14.28}' \
         id="$id" total="$total" idle="$idle")" in
-
+        # for some reason this one "▄" (3) is wider in my fonts than others from the set
         "0") printf "▁" ;;
         "1") printf "▂" ;;
         "2") printf "▃" ;;
-        # for some reason this one is wider than others from the set
-        # "3") printf "▄" ;;
         "3") printf "▅" ;;
         "4") printf "▆" ;;
         "5") printf "▇" ;;
         "6") printf "▇" ;;
         "7") printf "█" ;;
-        "8") printf "▉" ;;
     esac
 done; printf "\\n"
 echo "$stats" > "$cache"

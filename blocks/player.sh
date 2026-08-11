@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+## constants
 # type: playerctl or mpc
 player_type="playerctl"
 line_limit=35
 
+## variables
+declare player status artist title length file=""
+
+## functions
+
 handle_block_button_playerctl() {
     case "${BLOCK_BUTTON:-}" in
         1) playerctl play-pause ;;
-        2) playerctl -a pause ;;
+        2) playerctl --all-players pause ;;
         3) switch_player ;;
         4) playerctl previous ;;
         5) playerctl next ;;
@@ -34,9 +40,9 @@ switch_player() {
 }
 
 parse_metadata_playerctl() {
-    status="$(playerctl status 2>&1 | tr '[:upper:]' '[:lower:]' || true)"
+    status="$(playerctl status 2>&1 || true)"
     IFS='' read -r artist title length <<< \
-        "$(playerctl metadata -f "{{ artist }}{{ title }}{{ duration(mpris:length) }}" 2>/dev/null)"
+        "$(playerctl metadata --format "{{artist}}{{title}}{{duration(mpris:length)}}" 2>/dev/null)"
 }
 
 parse_metadata_mpc() {
@@ -76,7 +82,8 @@ get_current_song() {
 
 handle_status() {
     local status_icon message
-    case "${status:-}" in
+    status="$(echo -n "${status:-}" | tr '[:upper:]' '[:lower:]')"
+    case "$status" in
         playing)
             status_icon='▶'
             message="$(get_current_song)"
@@ -91,7 +98,7 @@ handle_status() {
             ;;
         *)
             status_icon='❓'
-            message="${status:-}"
+            message="$status"
             ;;
     esac
     echo -n "🎵 $message $status_icon"
@@ -99,7 +106,6 @@ handle_status() {
 
 ### main
 
-declare status artist title length file=""
 case "$player_type" in
     mpc)
         handle_block_button_mpc

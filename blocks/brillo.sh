@@ -10,4 +10,4 @@ case "$BLOCK_BUTTON" in
     10) brillo -A 1 ;;
 esac
 
-echo "🌞 $(brillo | cut -d'.' -f1)"
+echo "🌞 $(brillo)"
