@@ -5,8 +5,6 @@ set -e
 # Show 📶 if connected to ethernet
 # Show ❎ if none.
 
-# TODO: show external IP address
-
 case "$BLOCK_BUTTON" in
     1) notify-send "🌐 Network" "\
 📡: wifi connection with quality
@@ -14,7 +12,7 @@ case "$BLOCK_BUTTON" in
 ❎: no ethernet/wifi connection
 ❓: unknown ethernet status
 " ;;
-    2) setsid "$TERMINAL" -c dropdown -e bash -c "speedtest ; read -rsp $'Press any key to exit\n' -n1" & ;;
+    2) setsid "$TERMINAL" -c floating -e bash -c "speedtest ; read -rsp $'Press any key to exit\n' -n1" & ;;
     3) setsid "$TERMINAL" -e nmtui & ;;
 esac
 

@@ -15,6 +15,6 @@ esac
 
 level=$(echo "$status" | cut -d' ' -f2)
 case "$status" in
-    false*) echo "🎤 🟢 $level" ;;
+    false*) echo "🎤 🔴 $level" ;;
     true*)  echo "🎤 $level" ;;
 esac
