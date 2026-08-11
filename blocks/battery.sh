@@ -1,5 +1,5 @@
 #!/bin/dash
-set -e
+set -eu
 
 capacity=$(cat /sys/class/power_supply/BAT0/capacity)
 status=$(cat /sys/class/power_supply/BAT0/status)
@@ -7,7 +7,7 @@ status=$(cat /sys/class/power_supply/BAT0/status)
 if [ "$status" = "Charging" ]; then
     echo "🔌 $capacity"
 elif [ "$status" = "Discharging" ] || [ "$status" = "Not charging" ] || [ "$status" = "Full" ]; then
-    echo "🔋 $capacity"
+    echo "🔋$capacity"
 else
-    echo "❓ $capacity"
+    echo "❓$capacity"
 fi

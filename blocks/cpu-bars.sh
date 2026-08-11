@@ -27,21 +27,17 @@ echo "$stats" | while read -r row; do
     total=${rest%% *}
     idle=${rest##* }
 
+    # for some reason 3 (▄) and 8 (█) are wider in my fonts than others from the set,
+    # thus I use 6 blocks: https://www.unicode.org/charts/nameslist/n_2580.html
     case "$(echo "$old" | awk '{if ($1 == id)
-        printf "%d\n", (1 - (idle - $3)  / (total - $2))*100 /12.5}' \
-        id="$id" total="$total" idle="$idle")" in
-
+        printf "%d\n", (1 - (idle - $3)  / (total - $2))*100 / (100/blocks) }' \
+        id="$id" total="$total" idle="$idle" blocks=6)" in
         "0") printf "▁" ;;
         "1") printf "▂" ;;
         "2") printf "▃" ;;
-        # for some reason this one is wider than others from the set
-        # "3") printf "▄" ;;
         "3") printf "▅" ;;
         "4") printf "▆" ;;
         "5") printf "▇" ;;
-        "6") printf "▇" ;;
-        "7") printf "█" ;;
-        "8") printf "▉" ;;
     esac
 done; printf "\\n"
 echo "$stats" > "$cache"
